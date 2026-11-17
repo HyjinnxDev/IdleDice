@@ -1,76 +1,57 @@
 // Pure game logic. No DOM — `node test.js` exercises everything here.
 // ponytail: plain Number caps ~1e308; swap to break_infinity.js if late game exceeds it.
+import { TREES } from './trees.js';
+export { TREES };
 
-export const MAX_DICE = 8;
-export const BOSS_TIME = 30000;
+export const NODE = {};
+for (const t in TREES) for (const node of TREES[t]) NODE[node.id] = { ...node, tree: t };
+
+// p = node id prefix, iv = base auto interval (ms), unlock = perm node that opens the game.
+export const GAMES = {
+  dice:  { name: 'Dice',     icon: '🎲', verb: 'ROLL', p: 'd', iv: 2500, unlock: null },
+  coin:  { name: 'Coinflip', icon: '🪙', verb: 'FLIP', p: 'c', iv: 2000, unlock: 'p_coin' },
+  cards: { name: 'Cards',    icon: '🃏', verb: 'DEAL', p: 'k', iv: 4000, unlock: 'p_cards' },
+};
 export const TIERS = ['Wood', 'Stone', 'Bronze', 'Silver', 'Gold', 'Crystal', 'Obsidian', 'Cosmic'];
+export const PRESTIGE_AT = 1e7;
+export const MAX_TICKETS = 10;
 
-export const UPGRADES = {
-  auto:     { name: 'Auto-Roller',    desc: 'Dice roll themselves',   base: 25,  growth: 1,   max: 1 },
-  speed:    { name: 'Quick Hands',    desc: 'Auto-roll 10% faster',   base: 60,  growth: 1.6, max: 20 },
-  crit:     { name: 'Lucky Rolls',    desc: '+2% crit chance',        base: 100, growth: 1.5, max: 20 },
-  critMult: { name: 'Critical Force', desc: '+0.5× crit damage',      base: 250, growth: 1.7 },
-  combo:    { name: 'Combo Master',   desc: '+25% combo bonus',       base: 150, growth: 1.8 },
-};
-
-export const PERMS = {
-  dmg:       { name: 'Sharpened Pips',  desc: '+25% damage',            base: 1,  growth: 1.4 },
-  gold:      { name: 'Gilded Dice',     desc: '+25% gold',              base: 1,  growth: 1.4 },
-  critMult:  { name: 'Deadly Edge',     desc: '+1× crit damage',        base: 2,  growth: 1.6 },
-  startGold: { name: 'Inheritance',     desc: 'Start runs with gold',   base: 2,  growth: 2,   max: 10 },
-  startAuto: { name: 'Clockwork Heart', desc: 'Start with Auto-Roller', base: 3,  growth: 1,   max: 1 },
-  startDice: { name: 'Heirloom Dice',   desc: '+1 starting die',        base: 5,  growth: 4,   max: 3 },
-  offline:   { name: 'Dream Rolling',   desc: '+2h offline cap',        base: 2,  growth: 2,   max: 11 },
-  choices:   { name: 'Wider Path',      desc: '+1 boon choice',         base: 10, growth: 3,   max: 2 },
-  reroll:    { name: 'Fate Twister',    desc: '+1 boon reroll per run', base: 5,  growth: 2,   max: 5 },
-};
-
-export const BOONS = {
-  sixes:  { icon: '⚅', name: 'Lucky Sixes',   desc: '6s are worth double' },
-  odd:    { icon: '⚀', name: 'Odd Fortune',   desc: 'Odd faces ×2' },
-  even:   { icon: '⚁', name: 'Even Keel',     desc: 'Even faces ×2' },
-  snake:  { icon: '🐍', name: 'Snake Eyes',    desc: '1s count as 7' },
-  boss:   { icon: '⚔️', name: 'Giant Slayer',  desc: '×2 damage to bosses' },
-  reroll: { icon: '🔁', name: 'Second Chance', desc: 'Lowest die rerolls once' },
-  golden: { icon: '✨', name: 'Gilded Luck',   desc: 'Golden dice appear 2× as often' },
-  die:    { icon: '👻', name: 'Phantom Die',   desc: '+1 die this run', stack: true },
-  combo:  { icon: '🔥', name: 'Combo Fever',   desc: '+100% combo bonus', stack: true },
-  crit:   { icon: '🎯', name: 'Keen Eye',      desc: '+5% crit chance', stack: true },
-  gold:   { icon: '💰', name: 'Midas Touch',   desc: '+50% gold', stack: true },
-  speed:  { icon: '⏱️', name: 'Clockwork',     desc: 'Auto-roll 25% faster', stack: true },
-};
-
-export const cost = (base, growth, lvl) => Math.ceil(base * growth ** lvl);
-export const isBoss = f => f % 10 === 0;
-export const floorHp = f => Math.ceil(10 * 1.38 ** (f - 1) * (isBoss(f) ? 5 : 1));
+export const L = (s, id) => s.lv[id] || 0;
+export const gameOn = (s, g) => !GAMES[g].unlock || L(s, GAMES[g].unlock) > 0;
+export const hasAuto = (s, g) => gameOn(s, g) && L(s, GAMES[g].p + '_auto') > 0;
+export function isUnlocked(s, id) {
+  const nd = NODE[id];
+  return (nd.tree === 'perm' || gameOn(s, nd.tree)) && (!nd.req.length || nd.req.some(r => L(s, r) > 0));
+}
 
 export function newState(now = Date.now()) {
-  const s = { v: 1, ether: 0, totalEther: 0, bestFloor: 1, tickets: 0, autoOn: true, last: now,
-    perm: {}, stats: { rolls: 0, jackpots: 0, ascends: 0 } };
-  for (const k in PERMS) s.perm[k] = 0;
+  const s = { v: 2, view: 'dice', chips: 0, totalChips: 0, tickets: 0, last: now, lv: {}, autoOff: {},
+    buffs: { frenzy: 0, overdrive: 0 }, stats: { plays: 0, jackpots: 0, prestiges: 0, earned: 0, best: '' } };
   return newRun(s);
 }
 
+// Reset run: gold + every non-perm node.
 export function newRun(s) {
-  s.gold = s.perm.startGold ? 50 * 5 ** s.perm.startGold : 0;
-  s.floor = 1; s.maxFloor = 1; s.hp = floorHp(1); s.bossEnd = 0;
-  s.dice = Array.from({ length: 1 + s.perm.startDice }, () => ({ lvl: 0, tier: 0 }));
-  s.up = {};
-  for (const k in UPGRADES) s.up[k] = 0;
-  s.up.auto = s.perm.startAuto;
-  s.boons = {}; s.boonChoice = null; s.boonFloor = 0; s.rerolls = s.perm.reroll;
-  s.buffs = { frenzy: 0, overdrive: 0 };
+  for (const id in s.lv) if (NODE[id]?.tree !== 'perm') delete s.lv[id];
+  if (L(s, 'p_autop')) for (const g in GAMES) s.lv[GAMES[g].p + '_auto'] = 1;
+  s.gold = L(s, 'p_head') ? 100 * 10 ** L(s, 'p_head') : 0;
+  s.runEarned = 0;
+  s.coin = { streak: 0 };
   return s;
 }
 
-// Phantom dice copy your best die.
-export function activeDice(s) {
-  const extra = s.boons.die || 0;
-  if (!extra) return s.dice;
-  const best = s.dice.reduce((a, d) => (d.tier > a.tier || (d.tier === a.tier && d.lvl > a.lvl) ? d : a));
-  return [...s.dice, ...Array.from({ length: extra }, () => ({ ...best, phantom: true }))];
+export const incomeMult = (s, now) => (1 + 0.1 * L(s, 'p_bonus')) * (now < s.buffs.frenzy ? 7 : 1);
+export const offlineCapH = s => 2 + 2 * L(s, 'p_off');
+export const goldenRate = s => 1 + 0.25 * L(s, 'p_gold');
+
+// Pass now = Infinity to ignore timed buffs (estimates).
+export function autoIv(s, g, now = Infinity) {
+  const p = GAMES[g].p;
+  const iv = Math.max(200, GAMES[g].iv * 0.9 ** L(s, p + '_speed') * 0.85 ** L(s, p + '_over'));
+  return now < s.buffs.overdrive ? iv / 5 : iv;
 }
 
+// ---------- dice ----------
 export function combo(faces) {
   const c = [0, 0, 0, 0, 0, 0, 0];
   for (const f of faces) c[f]++;
@@ -86,146 +67,152 @@ export function combo(faces) {
   return { name: '', mult: 1 };
 }
 
-export function dieValue(s, die, face) {
-  let v = (s.boons.snake && face === 1 ? 7 : face) + die.lvl;
-  if (s.boons.sixes && face === 6) v *= 2;
-  if (s.boons.odd && face % 2) v *= 2;
-  if (s.boons.even && !(face % 2)) v *= 2;
-  return v * 2 ** die.tier;
-}
-
-export const critChance = s => Math.min(0.5, 0.02 * s.up.crit + 0.05 * (s.boons.crit || 0));
-export const critMult = s => 3 + 0.5 * s.up.critMult + s.perm.critMult;
-export const dmgMult = s => 1 + 0.25 * s.perm.dmg;
-export const goldMult = s => (1 + 0.25 * s.perm.gold) * (1 + 0.5 * (s.boons.gold || 0));
-export const offlineCapH = s => 2 + 2 * s.perm.offline;
-
-// Pass now = Infinity to ignore timed buffs (used for estimates).
-export function autoInterval(s, now) {
-  const iv = Math.max(150, 2000 * 0.9 ** s.up.speed * 0.75 ** (s.boons.speed || 0));
-  return now < s.buffs.overdrive ? Math.max(60, iv / 5) : iv;
-}
-
-export function roll(s, rng = Math.random, now = Date.now()) {
-  const dice = activeDice(s);
+function playDice(s, rng, now) {
   const d6 = () => 1 + Math.floor(rng() * 6);
-  const faces = dice.map(d6);
-  if (s.boons.reroll) {
-    const i = faces.indexOf(Math.min(...faces));
-    faces[i] = Math.max(faces[i], d6());
-  }
-  const values = faces.map((f, i) => dieValue(s, dice[i], f));
+  const faces = Array.from({ length: 1 + L(s, 'd_die') + L(s, 'd_six') }, d6);
+  const low = faces.map((_, i) => i).sort((a, b) => faces[a] - faces[b]).slice(0, L(s, 'd_load'));
+  for (const i of low) faces[i] = Math.max(faces[i], d6());
   const cb = combo(faces);
-  const comboMult = 1 + (cb.mult - 1) * (1 + 0.25 * s.up.combo + (s.boons.combo || 0));
-  const crit = rng() < critChance(s);
-  let total = values.reduce((a, b) => a + b, 0) * comboMult * dmgMult(s);
-  if (crit) total *= critMult(s);
-  if (now < s.buffs.frenzy) total *= 7;
-  const gold = Math.floor(total * goldMult(s));
-  if (s.boons.boss && isBoss(s.floor)) total *= 2;
-  return { faces, values, combo: cb, crit, damage: Math.floor(total), gold, dice };
+  let mult = 1 + (cb.mult - 1) * (1 + 0.25 * L(s, 'd_combo'));
+  if (cb.name === 'JACKPOT') mult *= 2 ** L(s, 'd_jack');
+  const crit = rng() < 0.02 * L(s, 'd_crit');
+  const per = 2 ** L(s, 'd_mat') * 1.15 ** L(s, 'd_rush') * incomeMult(s, now);
+  const values = faces.map(f => (f + L(s, 'd_pip')) * per);
+  const gold = values.reduce((a, b) => a + b, 0) * mult * (crit ? 2 + 0.5 * L(s, 'd_critx') : 1);
+  return { g: 'dice', faces, values, combo: cb, crit, gold, rare: cb.name === 'JACKPOT',
+    label: cb.mult > 1 ? `${cb.name} ×${+mult.toFixed(1)}` : '' };
 }
 
-// Returns null if guardian survives, else { killed, wasBoss }.
-export function applyDamage(s, dmg, now = Date.now()) {
-  s.hp -= dmg;
-  if (s.hp > 0) return null;
-  const killed = s.floor, wasBoss = isBoss(killed);
-  if (wasBoss) s.tickets++;
-  s.floor++;
-  s.hp = floorHp(s.floor);
-  s.bossEnd = isBoss(s.floor) ? now + BOSS_TIME : 0;
-  s.maxFloor = Math.max(s.maxFloor, s.floor);
-  s.bestFloor = Math.max(s.bestFloor, s.floor);
-  if (killed % 5 === 0 && killed > s.boonFloor && !s.boonChoice) {
-    s.boonFloor = killed;
-    s.boonChoice = offerBoons(s);
+// ---------- coinflip ----------
+export const streakGrowth = s => 1.2 + 0.04 * L(s, 'c_pow');
+export const streakCap = s => 10 + 2 * L(s, 'c_cap');
+
+function playCoin(s, rng, now) {
+  const pHead = 0.5 + 0.015 * L(s, 'c_weight'), cap = streakCap(s), gr = streakGrowth(s);
+  const v = (1 + L(s, 'c_shiny')) * 2 ** L(s, 'c_mint') * 1.15 ** L(s, 'c_rush') * incomeMult(s, now);
+  const flips = [];
+  let gold = 0, rare = false;
+  for (let i = 1 + L(s, 'c_twin'); i > 0; i--) {
+    if (rng() < 0.002 * (1 + L(s, 'c_edge'))) { flips.push('E'); gold += v * 250; continue; }
+    if (rng() < pHead) {
+      const prev = s.coin.streak;
+      s.coin.streak = Math.min(cap, prev + 1);
+      if (prev < 10 && s.coin.streak >= 10) rare = true;
+      gold += v * gr ** s.coin.streak;
+      flips.push('H');
+    } else {
+      s.coin.streak = Math.floor(s.coin.streak * 0.25 * L(s, 'c_ins'));
+      flips.push('T');
+    }
   }
-  return { killed, wasBoss };
+  const st = s.coin.streak;
+  return { g: 'coin', flips, streak: st, gold, rare,
+    label: flips.includes('E') ? 'EDGE!' : st >= 2 ? `${st} streak ×${+(gr ** st).toFixed(1)}` : '' };
 }
 
-// Boss timer ran out: drop back a floor. Returns true if that happened.
-export function checkBoss(s, now) {
-  if (!s.bossEnd || now <= s.bossEnd) return false;
-  s.floor--;
-  s.hp = floorHp(s.floor);
-  s.bossEnd = 0;
-  return true;
+// ---------- cards ----------
+export const HANDS = [['High Card', 1], ['Pair', 1.5], ['Two Pair', 2.5], ['Three of a Kind', 4], ['Straight', 6],
+  ['Flush', 8], ['Full House', 12], ['Four of a Kind', 30], ['Straight Flush', 75], ['Royal Flush', 250]];
+
+// Best 5-card hand from 5–7 cards {r: 2..14, s: 0..3}. `used` = indices that make the hand.
+export function pokerHand(cards) {
+  const H = (rank, used) => ({ rank, name: HANDS[rank][0], mult: HANDS[rank][1], used });
+  const byR = {}, byS = {};
+  cards.forEach((c, i) => { (byR[c.r] ??= []).push(i); (byS[c.s] ??= []).push(i); });
+  const straight = idx => {
+    const m = {};
+    for (const i of idx) m[cards[i].r] ??= i;
+    if (m[14] !== undefined) m[1] = m[14]; // A-2-3-4-5
+    for (let hi = 14; hi >= 5; hi--) {
+      const run = [];
+      for (let r = hi; r > hi - 5 && m[r] !== undefined; r--) run.push(m[r]);
+      if (run.length === 5) return { hi, run };
+    }
+    return null;
+  };
+  const flush = Object.values(byS).find(a => a.length >= 5);
+  if (flush) { const sf = straight(flush); if (sf) return H(sf.hi === 14 ? 9 : 8, sf.run); }
+  const [g1, g2] = Object.values(byR).sort((a, b) => b.length - a.length || cards[b[0]].r - cards[a[0]].r);
+  if (g1.length >= 4) return H(7, g1.slice(0, 4));
+  if (g1.length >= 3 && g2?.length >= 2) return H(6, [...g1.slice(0, 3), ...g2.slice(0, 2)]);
+  if (flush) return H(5, flush.sort((a, b) => cards[b].r - cards[a].r).slice(0, 5));
+  const st = straight(cards.map((_, i) => i));
+  if (st) return H(4, st.run);
+  if (g1.length === 3) return H(3, g1);
+  if (g1.length === 2 && g2?.length === 2) return H(2, [...g1, ...g2]);
+  if (g1.length === 2) return H(1, g1);
+  return H(0, [g1[0]]);
 }
 
-export function offerBoons(s, rng = Math.random) {
-  const pool = Object.keys(BOONS).filter(k => BOONS[k].stack || !s.boons[k]);
-  for (let i = pool.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    [pool[i], pool[j]] = [pool[j], pool[i]];
-  }
-  return pool.slice(0, 3 + s.perm.choices);
+function playCards(s, rng, now) {
+  const deck = [];
+  for (let r = 2 + L(s, 'k_thin'); r <= 14; r++) for (let su = 0; su < 4; su++) deck.push({ r, s: su });
+  const n = 5 + L(s, 'k_extra');
+  for (let i = 0; i < n; i++) { const j = i + Math.floor(rng() * (deck.length - i)); [deck[i], deck[j]] = [deck[j], deck[i]]; }
+  const cards = deck.slice(0, n), h = pokerHand(cards);
+  let mult = 1 + (h.mult - 1) * (1 + 0.25 * L(s, 'k_power'));
+  if (h.rank >= 4) mult *= 1 + L(s, 'k_royal');
+  const base = h.used.reduce((a, i) => a + cards[i].r, 0) * (1 + 0.25 * L(s, 'k_sharp'));
+  const gold = base * mult * 2 ** L(s, 'k_foil') * 1.15 ** L(s, 'k_rush') * incomeMult(s, now);
+  return { g: 'cards', cards, hand: h, gold, rare: h.rank >= 7, label: h.rank ? `${h.name} ×${+mult.toFixed(1)}` : '' };
 }
 
-export function pickBoon(s, id) {
-  if (!s.boonChoice?.includes(id)) return false;
-  s.boons[id] = (s.boons[id] || 0) + 1;
-  s.boonChoice = null;
-  return true;
+const PLAY = { dice: playDice, coin: playCoin, cards: playCards };
+// Rolls one round. Mutates only s.coin (streak). Use collect() to bank it.
+export const play = (s, g, rng = Math.random, now = Date.now()) => PLAY[g](s, rng, now);
+
+export function earn(s, gold) { s.gold += gold; s.runEarned += gold; s.stats.earned += gold; }
+export function collect(s, r) {
+  earn(s, r.gold);
+  s.stats.plays++;
+  if (r.rare) s.tickets = Math.min(MAX_TICKETS, s.tickets + 1);
+  if (r.combo?.name === 'JACKPOT') s.stats.jackpots++;
 }
 
-export function rerollBoons(s) {
-  if (s.rerolls < 1 || !s.boonChoice) return false;
-  s.rerolls--;
-  s.boonChoice = offerBoons(s);
-  return true;
+// ---------- tree shop ----------
+export function priceOf(s, id) {
+  const nd = NODE[id], lvl = L(s, id);
+  if (lvl >= nd.max) return null;
+  const perm = nd.tree === 'perm';
+  return { cost: Math.ceil(nd.cost * nd.k ** lvl * (perm ? 1 : 0.95 ** L(s, 'p_disc'))), cur: perm ? 'chips' : 'gold' };
 }
 
-// Shop actions: 'up:<id>', 'perm:<id>', 'die', 'lvl:<i>', 'tier:<i>'. Returns null when maxed.
-export function priceOf(s, act) {
-  const [k, id] = act.split(':');
-  if (k === 'up' || k === 'perm') {
-    const def = (k === 'up' ? UPGRADES : PERMS)[id], lvl = s[k][id];
-    return lvl >= (def.max ?? Infinity) ? null : { cost: cost(def.base, def.growth, lvl), cur: k === 'up' ? 'gold' : 'ether' };
-  }
-  if (k === 'die') return s.dice.length >= MAX_DICE ? null : { cost: 10 * 12 ** (s.dice.length - 1), cur: 'gold' };
-  const d = s.dice[+id];
-  if (k === 'lvl') return { cost: cost(5, 1.15, d.lvl), cur: 'gold' };
-  if (k === 'tier') return d.tier >= TIERS.length - 1 ? null : { cost: 200 * 15 ** d.tier, cur: 'gold' };
-  return null;
-}
-
-export function buy(s, act) {
-  const p = priceOf(s, act);
+export function buy(s, id) {
+  const p = isUnlocked(s, id) && priceOf(s, id);
   if (!p || s[p.cur] < p.cost) return false;
   s[p.cur] -= p.cost;
-  const [k, id] = act.split(':');
-  if (k === 'up') s.up[id]++;
-  else if (k === 'perm') { s.perm[id]++; if (id === 'startAuto') s.up.auto = 1; }
-  else if (k === 'die') s.dice.push({ lvl: 0, tier: 0 });
-  else if (k === 'lvl') s.dice[+id].lvl++;
-  else if (k === 'tier') s.dice[+id].tier++;
+  s.lv[id] = L(s, id) + 1;
   return true;
 }
 
-export const etherGain = s => (s.maxFloor >= 10 ? Math.floor((s.maxFloor - 5) ** 1.5) : 0);
+// ---------- prestige ----------
+export const chipGain = s => (s.runEarned >= PRESTIGE_AT ? Math.floor(3 * Math.sqrt(s.runEarned / PRESTIGE_AT)) : 0);
 
 export function ascend(s) {
-  const gain = etherGain(s);
+  const gain = chipGain(s);
   if (!gain) return 0;
-  s.ether += gain; s.totalEther += gain; s.stats.ascends++;
+  s.chips += gain; s.totalChips += gain; s.stats.prestiges++;
   newRun(s);
   return gain;
 }
 
-// Monte-Carlo average gold per roll, no timed buffs.
-export function expectedGold(s, n = 300, rng = Math.random) {
+// ---------- estimates / offline ----------
+// Monte-Carlo gold/sec from auto play across all games, no timed buffs.
+export function gps(s, n = 300, rng = Math.random) {
   let t = 0;
-  for (let i = 0; i < n; i++) t += roll(s, rng, Infinity).gold;
-  return t / n;
+  for (const g in GAMES) {
+    if (!hasAuto(s, g)) continue;
+    const c = { ...s, coin: { ...s.coin } };
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum += play(c, g, rng, Infinity).gold;
+    t += sum / n / (autoIv(s, g) / 1000);
+  }
+  return t;
 }
-
-export const goldPerSec = s => expectedGold(s) / (autoInterval(s, Infinity) / 1000);
 
 export function offlineGold(s, now) {
   const secs = Math.min(Math.max(0, (now - s.last) / 1000), offlineCapH(s) * 3600);
-  if (!s.up.auto || secs < 60) return { gold: 0, secs };
-  return { gold: Math.floor(goldPerSec(s) * secs), secs };
+  return secs < 60 ? { gold: 0, secs } : { gold: Math.floor(gps(s) * secs), secs };
 }
 
 // Hi-Lo: ties lose; payout scales with odds and is slightly in the player's favour (tickets are scarce).

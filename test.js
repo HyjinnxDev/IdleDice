@@ -1,100 +1,115 @@
-// Logic self-check: `node test.js`
+// Logic self-check + pacing sim: `node test.js`
 import assert from 'node:assert/strict';
 import * as G from './js/game.js';
 
 const seq = (...v) => { let i = 0; return () => v[i++ % v.length]; };
+const C = str => str.split(' ').map(t => ({ r: '..23456789TJQKA'.indexOf(t[0]), s: 'shdc'.indexOf(t[1]) }));
+const hand = str => G.pokerHand(C(str)).name;
 
-// combos
+// dice combos
 assert.equal(G.combo([1]).mult, 1);
-assert.equal(G.combo([2, 2]).name, 'Pair');
 assert.equal(G.combo([2, 2, 3, 3]).name, 'Two Pair');
-assert.equal(G.combo([4, 4, 4]).name, 'Triple');
 assert.equal(G.combo([4, 4, 4, 2, 2]).name, 'Full House');
-assert.equal(G.combo([1, 2, 3, 4, 5]).name, 'Straight');
 assert.equal(G.combo([6, 2, 3, 4, 5, 6]).name, 'Straight');
-assert.equal(G.combo([5, 5, 5, 5]).name, 'Four of a Kind');
 assert.equal(G.combo([3, 3, 3, 3, 3]).name, 'JACKPOT');
 
-// rolling: rng 0.99 → face 6, no crit
+// poker hands (5–7 cards)
+assert.equal(hand('As Ks Qs Js Ts'), 'Royal Flush');
+assert.equal(hand('9h Kh Qh Jh Th 2c 2d'), 'Straight Flush');
+assert.equal(hand('Ac 2d 3h 4s 5c'), 'Straight');
+assert.equal(hand('Ac Kd Qh Js 9c'), 'High Card');
+assert.equal(hand('2h 7h 9h Jh Kh Kc Kd'), 'Flush');
+assert.equal(hand('Kh Kc Kd 7s 7c 7d 2h'), 'Full House');
+assert.equal(hand('9h 9c 9d 9s Ah'), 'Four of a Kind');
+assert.equal(hand('4h 4c 8d 8s Ah 2c 3d'), 'Two Pair');
+assert.equal(G.pokerHand(C('4h 4c 8d 8s Ah 2c 3d')).used.length, 4);
+
+// dice play: rng .99 → face 6, no crit
 const s = G.newState(0);
-let r = G.roll(s, seq(0.99), Infinity);
-assert.deepEqual(r.faces, [6]);
-assert.equal(r.damage, 6);
-s.dice[0] = { lvl: 1, tier: 2 };
-r = G.roll(s, seq(0.99), Infinity);
-assert.equal(r.damage, (6 + 1) * 4);
-s.boons.sixes = 1;
-assert.equal(G.roll(s, seq(0.99), Infinity).damage, (6 + 1) * 2 * 4);
-// frenzy ×7 only while active
+assert.equal(G.play(s, 'dice', seq(0.99), Infinity).gold, 6);
+s.lv.d_pip = 2; s.lv.d_mat = 1;
+assert.equal(G.play(s, 'dice', seq(0.99), Infinity).gold, (6 + 2) * 2);
 s.buffs.frenzy = 100;
-assert.equal(G.roll(s, seq(0.99), 50).damage, 56 * 7);
-assert.equal(G.roll(s, seq(0.99), 150).damage, 56);
-// combo bonus applies: two 6s = pair 1.5×
-const p = G.newState(0); p.dice.push({ lvl: 0, tier: 0 });
-assert.equal(G.roll(p, seq(0.99), Infinity).damage, Math.floor(12 * 1.5));
-// phantom die copies best die
-p.dice[1].tier = 3; p.boons.die = 1;
-assert.equal(G.activeDice(p).length, 3);
-assert.equal(G.activeDice(p)[2].tier, 3);
+assert.equal(G.play(s, 'dice', seq(0.99), 50).gold, 16 * 7);
 
-// shop
-const b = G.newState(0);
-assert.equal(G.buy(b, 'die'), false);
-b.gold = 10;
-assert.ok(G.buy(b, 'die'));
-assert.equal(b.dice.length, 2);
-assert.equal(b.gold, 0);
-b.gold = 1e9;
-assert.ok(G.buy(b, 'up:auto'));
-assert.equal(G.priceOf(b, 'up:auto'), null);
-assert.equal(G.buy(b, 'up:auto'), false);
+// coin: streak grows on heads, resets on tails, insurance keeps part
+const c = G.newState(0);
+c.lv.p_coin = 1;
+G.play(c, 'coin', seq(0.9, 0.1), Infinity); // no edge, heads
+G.play(c, 'coin', seq(0.9, 0.1), Infinity);
+assert.equal(c.coin.streak, 2);
+G.play(c, 'coin', seq(0.9, 0.9), Infinity); // tails
+assert.equal(c.coin.streak, 0);
+c.coin.streak = 8; c.lv.c_ins = 2;
+G.play(c, 'coin', seq(0.9, 0.9), Infinity);
+assert.equal(c.coin.streak, 4);
 
-// floors, boons, boss
-const f = G.newState(0);
-G.applyDamage(f, G.floorHp(1), 0);
-assert.equal(f.floor, 2);
-f.floor = 5; f.hp = 1;
-G.applyDamage(f, 1, 0);
-assert.equal(f.boonChoice.length, 3);
-assert.ok(G.pickBoon(f, f.boonChoice[0]));
-assert.equal(f.boonChoice, null);
-f.floor = 9; f.hp = 1;
-G.applyDamage(f, 1, 1000);
-assert.equal(f.floor, 10);
-assert.equal(f.bossEnd, 1000 + G.BOSS_TIME);
-assert.equal(G.checkBoss(f, 1000 + G.BOSS_TIME), false);
-assert.ok(G.checkBoss(f, 1001 + G.BOSS_TIME));
-assert.equal(f.floor, 9);
-f.hp = 1; G.applyDamage(f, 1, 0);          // back to boss
-f.hp = 1; const k = G.applyDamage(f, 1, 0); // kill boss
-assert.ok(k.wasBoss);
-assert.equal(f.tickets, 1);
-assert.ok(f.boonChoice); // floor 10 gives boon
+// tree: locked until parent owned, game trees gated by unlock, max respected
+const t = G.newState(0);
+t.gold = 1e9;
+assert.equal(G.buy(t, 'd_auto'), false);
+assert.ok(G.buy(t, 'd_pip') && G.buy(t, 'd_auto'));
+assert.equal(G.buy(t, 'd_auto'), false);
+assert.equal(G.priceOf(t, 'd_auto'), null);
+assert.equal(G.buy(t, 'c_shiny'), false);
+t.lv.p_coin = 1;
+assert.ok(G.buy(t, 'c_shiny'));
+assert.equal(G.priceOf(t, 'd_pip').cost, Math.ceil(10 * 1.4));
+t.lv.p_disc = 2;
+assert.equal(G.priceOf(t, 'd_pip').cost, Math.ceil(10 * 1.4 * 0.95 ** 2));
 
-// prestige
-f.maxFloor = 30;
-assert.equal(G.etherGain(f), 125);
-assert.equal(G.ascend(f), 125);
-assert.equal(f.floor, 1);
-assert.equal(f.ether, 125);
-assert.equal(f.boonChoice, null);
+// prestige: gain needs PRESTIGE_AT, resets run nodes, keeps perm + chips
+t.runEarned = G.PRESTIGE_AT - 1;
+assert.equal(G.chipGain(t), 0);
+t.runEarned = G.PRESTIGE_AT * 4;
+assert.equal(G.ascend(t), 6);
+assert.equal(t.chips, 6);
+assert.equal(G.L(t, 'd_pip'), 0);
+assert.equal(G.L(t, 'p_coin'), 1);
+assert.equal(t.runEarned, 0);
+t.lv.p_autop = 1; G.newRun(t);
+assert.ok(G.hasAuto(t, 'dice') && G.hasAuto(t, 'coin') && !G.hasAuto(t, 'cards'));
 
-// offline
+// offline: needs auto, capped
 const o = G.newState(0);
-assert.equal(G.offlineGold(o, 3600e3).gold, 0); // no auto-roller
-o.up.auto = 1;
-const off = G.offlineGold(o, 3600e3);
-assert.ok(off.gold > 0 && off.secs === 3600);
+assert.equal(G.offlineGold(o, 3600e3).gold, 0);
+o.lv.d_auto = 1;
+assert.ok(G.offlineGold(o, 3600e3).gold > 0);
 assert.equal(G.offlineGold(o, 100 * 3600e3).secs, 2 * 3600);
 
-// hi-lo
+// Hi-Lo + fmt
 assert.equal(G.hiloMult(6, 1), 0);
-assert.equal(G.hiloMult(1, -1), 0);
-assert.ok(G.hiloMult(1, 1) > 1);
-
-// fmt
+assert.ok(Math.abs(G.hiloMult(3, 1) - 2.1) < 1e-9);
 assert.equal(G.fmt(999), '999');
 assert.equal(G.fmt(1500), '1.50K');
 assert.equal(G.fmt(1e15), '1.00aa');
+
+// Pacing sim: greedy bot taps dice 2×/s until it owns Auto, then idles; buys the cheapest affordable node.
+function simRun(s, maxMin = 300) {
+  const dt = 0.25, timers = {};
+  let t = 0;
+  for (; t < maxMin * 60 && !G.chipGain(s); t += dt) {
+    for (const g in G.GAMES) {
+      if (!G.gameOn(s, g)) continue;
+      const iv = G.hasAuto(s, g) ? G.autoIv(s, g) / 1000 : g === 'dice' ? 0.5 : Infinity;
+      timers[g] = (timers[g] || 0) + dt;
+      while (timers[g] >= iv) { timers[g] -= iv; G.collect(s, G.play(s, g, Math.random, Infinity)); }
+    }
+    for (;;) {
+      const best = Object.keys(G.NODE).filter(id => G.NODE[id].tree !== 'perm' && G.isUnlocked(s, id))
+        .map(id => [id, G.priceOf(s, id)]).filter(([, p]) => p).sort((a, b) => a[1].cost - b[1].cost)[0];
+      if (!best || best[1].cost > s.gold) break;
+      G.buy(s, best[0]);
+    }
+  }
+  return t / 60;
+}
+const p = G.newState(0);
+const m1 = simRun(p);
+G.ascend(p); G.buy(p, 'p_coin');
+const m2 = simRun(p);
+console.log(`pacing: 1st prestige ${m1.toFixed(0)} min, 2nd ${m2.toFixed(0)} min (idle bot)`);
+assert.ok(m1 > 45 && m1 < 80, 'first prestige should take ~1h');
+assert.ok(m2 < m1, 'second run with coinflip should be faster');
 
 console.log('ok');
