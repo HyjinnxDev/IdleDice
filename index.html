@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#15111f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Dice Depths">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css">
+<title>Dice Depths</title>
+</head>
+<body>
+<div id="app">
+  <header id="bar">
+    <div class="stat" id="goldstat"><span>🪙</span><b id="gold">0</b></div>
+    <div class="stat ether"><span>✦</span><b id="ether">0</b></div>
+    <div class="stat"><span class="muted">Floor</span><b id="floor">1</b></div>
+  </header>
+
+  <main id="play">
+    <section id="arena">
+      <div id="buffs"></div>
+      <div id="mname"></div>
+      <div id="guardian"><div id="monster">🐀</div></div>
+      <div id="hpbar"><div id="hpfill"></div><span id="hptext"></span></div>
+      <div id="bosstimer" hidden><div id="bossfill"></div></div>
+      <div id="combo"></div>
+      <div id="boons"></div>
+    </section>
+    <section id="tray"></section>
+    <div id="controls">
+      <button id="roll">ROLL</button>
+      <button id="autobtn" hidden>AUTO<small>ON</small></button>
+    </div>
+  </main>
+
+  <aside id="panel">
+    <nav id="tabs">
+      <button data-tab="up" class="on">Upgrades</button>
+      <button data-tab="dice">Dice</button>
+      <button data-tab="hilo">Hi-Lo</button>
+      <button data-tab="asc">Ascend</button>
+      <button data-tab="cfg" aria-label="Settings">⚙</button>
+    </nav>
+    <div id="sheet"></div>
+  </aside>
+</div>
+
+<canvas id="fx"></canvas>
+<div id="modal" hidden><div class="card" id="modalcard"></div></div>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
