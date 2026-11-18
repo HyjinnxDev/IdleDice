@@ -1,6 +1,6 @@
 // Bump CACHE on each deploy so old caches get dropped.
-const CACHE = 'dicedepths-v3';
-const FILES = ['./', 'index.html', 'style.css', 'js/main.js', 'js/game.js', 'js/save.js', 'js/hilo.js', 'js/trees.js',
+const CACHE = 'dicedepths-v4';
+const FILES = ['./', 'index.html', 'style.css', 'js/main.js', 'js/game.js', 'js/save.js', 'js/hilo.js', 'js/trees.js', 'js/modes.js', 'js/view.js',
   'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 
 self.addEventListener('install', e => {

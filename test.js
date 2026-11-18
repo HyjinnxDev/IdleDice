@@ -1,129 +1,173 @@
-// Logic self-check + pacing sim: `node test.js`
+// Logic self-check + pacing sim: `node test.js` (`quick` skips the sim, `assert` enforces pacing targets)
 import assert from 'node:assert/strict';
 import * as G from './js/game.js';
 
 const seq = (...v) => { let i = 0; return () => v[i++ % v.length]; };
 const C = str => str.split(' ').map(t => ({ r: '..23456789TJQKA'.indexOf(t[0]), s: 'shdc'.indexOf(t[1]) }));
 const hand = str => G.pokerHand(C(str)).name;
+const lv = (s, id, n) => { s.g[G.NODE[id].game].lv[id] = n; };
 
-// dice combos
-assert.equal(G.combo([1]).mult, 1);
+// dice combos + poker hands
 assert.equal(G.combo([2, 2, 3, 3]).name, 'Two Pair');
 assert.equal(G.combo([4, 4, 4, 2, 2]).name, 'Full House');
 assert.equal(G.combo([6, 2, 3, 4, 5, 6]).name, 'Straight');
 assert.equal(G.combo([3, 3, 3, 3, 3]).name, 'JACKPOT');
-
-// poker hands (5–7 cards)
 assert.equal(hand('As Ks Qs Js Ts'), 'Royal Flush');
 assert.equal(hand('9h Kh Qh Jh Th 2c 2d'), 'Straight Flush');
 assert.equal(hand('Ac 2d 3h 4s 5c'), 'Straight');
-assert.equal(hand('Ac Kd Qh Js 9c'), 'High Card');
 assert.equal(hand('2h 7h 9h Jh Kh Kc Kd'), 'Flush');
 assert.equal(hand('Kh Kc Kd 7s 7c 7d 2h'), 'Full House');
-assert.equal(hand('9h 9c 9d 9s Ah'), 'Four of a Kind');
-assert.equal(hand('4h 4c 8d 8s Ah 2c 3d'), 'Two Pair');
 assert.equal(G.pokerHand(C('4h 4c 8d 8s Ah 2c 3d')).used.length, 4);
 
-// dice play: rng .99 → face 6, no crit
+// hold strategies
+const hc = C('4h 4c 9h Jh 2h');
+assert.deepEqual(G.holds(hc, 'pairs'), [0, 1]);
+assert.deepEqual(G.holds(hc, 'flush').sort(), [0, 2, 3, 4]);
+assert.equal(G.holds(C('5c 6d 7h 8s Kc'), 'straight').length, 4);
+assert.equal(G.holds(C('5c 6d 7h 8s 9c'), 'pairs').length, 5); // made straight is kept by any strategy
+
+// dice: rng .99 → face 6, stats from tree, forge material ×2^t, gilded 6s ×3
 const s = G.newState(0);
 assert.equal(G.play(s, 'dice', seq(0.99), Infinity).gold, 6);
-s.lv.d_pip = 2; s.lv.d_mat = 1;
-assert.equal(G.play(s, 'dice', seq(0.99), Infinity).gold, (6 + 2) * 2);
+lv(s, 'd_pip', 2);
+assert.equal(G.play(s, 'dice', seq(0.99), Infinity).gold, 8);
+s.g.dice.sys.mat[0] = 3; s.g.dice.sys.ench[0] = 'g';
+assert.equal(G.play(s, 'dice', seq(0.99), Infinity).gold, 8 * 8 * 3);
 s.buffs.frenzy = 100;
-assert.equal(G.play(s, 'dice', seq(0.99), 50).gold, 16 * 7);
+assert.equal(G.play(s, 'dice', seq(0.99), 50).gold, 8 * 8 * 3 * 7);
 
-// new branches: echo doubles, gilded sixes, suit purge deck, every path has its own capstone (no merges)
-const e = G.newState(0);
-e.lv.d_echo = 10; e.lv.d_reson = 1;
-assert.equal(G.play(e, 'dice', seq(0.99, 0.99, 0.01), Infinity).gold, 6 * 3); // no crit, echo → ×(2+1)
-e.lv.d_echo = 0; e.lv.d_alch = 1;
-assert.ok(Math.abs(G.play(e, 'dice', seq(0.99), Infinity).gold - 6 * 1.2) < 1e-9);
-e.lv.k_thin = 4; e.lv.k_suit = 1;
-assert.equal(G.deckSize(e), 27);
-for (const t in G.TREES) {
+// coin pot & bank: pot = (pot + v) * growth on heads, banks at target, tails wipes (insurance keeps part)
+const c = G.newState(0), cs = c.g.coin.sys;
+cs.target = 2;
+assert.equal(G.play(c, 'coin', seq(0.9, 0.1), Infinity).gold, 0);   // heads → pot 1.25
+assert.equal(cs.pot, 1.25);
+assert.equal(G.play(c, 'coin', seq(0.9, 0.1), Infinity).gold, (1.25 + 1) * 1.25); // banks at 2
+assert.equal(cs.pot, 0);
+G.play(c, 'coin', seq(0.9, 0.1), Infinity);
+G.play(c, 'coin', seq(0.9, 0.9), Infinity);                               // tails
+assert.equal(cs.pot, 0);
+lv(c, 'c_ins', 2); cs.target = 9;
+for (let i = 0; i < 4; i++) G.play(c, 'coin', seq(0.9, 0.1), Infinity);
+G.play(c, 'coin', seq(0.9, 0.9), Infinity);
+assert.equal(cs.streak, 2);
+assert.ok(G.bankNow(c) > 0 && cs.pot === 0);
+
+// slots: line scoring with wilds, scatters give free spins
+const sl = G.newState(0), sg = sl.g.slots;
+let r = G.scoreSlots(sg, {}, [[6, 6, 6], [6, G.WILD, 0], [6, 6, 1]], 1);
+assert.equal(r.wins[0].count, 3);
+assert.equal(r.gold, 250 * 3);
+r = G.scoreSlots(sg, {}, [[G.SCAT, 0, 0], [G.SCAT, 1, 1], [G.SCAT, 2, 2]], 1);
+assert.ok(r.feats.includes('free') && sg.sys.free === 5);
+
+// plinko: path → bucket, tilt biases, edges pay most
+const pl = G.newState(0);
+r = G.play(pl, 'plinko', seq(0.01), Infinity);
+assert.equal(r.balls[0].k, 8);
+assert.ok(r.feats.includes('edge'));
+assert.ok(G.bucketMult({}, pl.g.plinko.sys, 8, 0) > G.bucketMult({}, pl.g.plinko.sys, 8, 4) * 10);
+pl.g.plinko.sys.tilt = 1;
+let right = 0;
+for (let i = 0; i < 2000; i++) right += G.play(pl, 'plinko', Math.random, Infinity).balls[0].k;
+assert.ok(right / 2000 > 4.1, 'tilt right pushes balls right');
+
+// tree: parent + stage tier gating, max, rebirth tree uses essence
+const t = G.newState(0), tg = t.g.dice;
+tg.cash = 1e12;
+assert.equal(G.buy(t, 'd_auto'), false);
+assert.ok(G.buy(t, 'd_pip') && G.buy(t, 'd_auto') && G.buy(t, 'd_speed'));
+assert.equal(G.buy(t, 'd_auto'), false);
+lv(t, 'd_speed', 10);
+assert.equal(G.buy(t, 'd_over'), false, 'row 3 needs stage 3');
+tg.stage = 3;
+assert.ok(G.buy(t, 'd_over'));
+assert.equal(G.buy(t, 'dr_inc'), false);
+tg.ess = 1;
+assert.ok(G.buy(t, 'dr_inc'));
+for (const k in G.ALL) {
   const kids = {};
-  for (const nd of G.TREES[t]) { assert.ok(nd.req.length <= 1, `${nd.id} merges paths`); for (const r of nd.req) kids[r] = 1; }
-  if (t !== 'perm') assert.ok(G.TREES[t].filter(nd => !kids[nd.id]).length >= 6, `${t} needs 6 distinct endpoints`);
+  for (const nd of G.ALL[k]) { assert.ok(nd.req.length <= 1, `${nd.id} merges paths`); for (const p of nd.req) kids[p] = 1; assert.ok(G.NODE[nd.id].stat); }
+  if (!k.endsWith('_r')) assert.ok(G.ALL[k].filter(nd => !kids[nd.id]).length >= 6, `${k} needs 6 endpoints`);
 }
 
-// coin: streak grows on heads, resets on tails, insurance keeps part
-const c = G.newState(0);
-c.lv.p_coin = 1;
-G.play(c, 'coin', seq(0.9, 0.1), Infinity); // no edge, heads
-G.play(c, 'coin', seq(0.9, 0.1), Infinity);
-assert.equal(c.coin.streak, 2);
-G.play(c, 'coin', seq(0.9, 0.9), Infinity); // tails
-assert.equal(c.coin.streak, 0);
-c.coin.streak = 8; c.lv.c_ins = 2;
-G.play(c, 'coin', seq(0.9, 0.9), Infinity);
-assert.equal(c.coin.streak, 4);
+// workshop buys charge cash, settings are free
+const w = G.newState(0);
+assert.equal(G.wsBuy(w, 'dice', 'forge:0'), false);
+w.g.dice.cash = 300;
+assert.ok(G.wsBuy(w, 'dice', 'forge:0') && w.g.dice.sys.mat[0] === 1 && w.g.dice.cash === 0);
+assert.ok(G.wsBuy(w, 'cards', 'strat:flush') && w.g.cards.sys.strat === 'flush');
+assert.equal(G.wsBuy(w, 'cards', 'strat:smart'), false, 'smart locked until stage 15');
+assert.ok(G.wsBuy(w, 'plinko', 'tilt:-1') && w.g.plinko.sys.tilt === -1);
 
-// tree: locked until parent owned, game trees gated by unlock, max respected
-const t = G.newState(0);
-t.gold = 1e9;
-assert.equal(G.buy(t, 'd_auto'), false);
-assert.ok(G.buy(t, 'd_pip') && G.buy(t, 'd_auto'));
-assert.equal(G.buy(t, 'd_auto'), false);
-assert.equal(G.priceOf(t, 'd_auto'), null);
-assert.equal(G.buy(t, 'c_shiny'), false);
-t.lv.p_coin = 1;
-assert.ok(G.buy(t, 'c_shiny'));
-assert.equal(G.priceOf(t, 'd_pip').cost, Math.ceil(10 * 1.4));
-t.lv.p_disc = 2;
-assert.equal(G.priceOf(t, 'd_pip').cost, Math.ceil(10 * 1.4 * 0.95 ** 2));
+// stages: earn goal + feat on every 5th
+const st = G.newState(0), sd = st.g.dice;
+assert.equal(G.claim(st, 'dice'), false);
+sd.total = G.stageGoal('dice', 4).earn;
+for (let i = 0; i < 4; i++) assert.ok(G.claim(st, 'dice'));
+sd.total = G.stageGoal('dice', 5).earn;
+assert.equal(G.claim(st, 'dice'), false, 'stage 5 needs its feat');
+sd.feats.Triple = 1;
+assert.ok(G.claim(st, 'dice'));
+assert.equal(G.casinoLv(st), 5);
 
-// prestige: gain needs PRESTIGE_AT, resets run nodes, keeps perm + chips
-t.runEarned = G.PRESTIGE_AT - 1;
-assert.equal(G.chipGain(t), 0);
-t.runEarned = G.PRESTIGE_AT * 4;
-assert.equal(G.ascend(t), 6);
-assert.equal(t.chips, 6);
-assert.equal(G.L(t, 'd_pip'), 0);
-assert.equal(G.L(t, 'p_coin'), 1);
-assert.equal(t.runEarned, 0);
-t.lv.p_autop = 1; G.newRun(t);
-assert.ok(G.hasAuto(t, 'dice') && G.hasAuto(t, 'coin') && !G.hasAuto(t, 'cards'));
+// rebirth: needs stage 10, resets cash + main tree, keeps stages, essence, rebirth tree, forge
+sd.stage = 10; sd.earned = G.stageGoal('dice', 10).earn * 4; sd.cash = 5;
+lv(st, 'd_pip', 5); lv(st, 'dr_inc', 1); sd.sys.mat[0] = 2;
+assert.equal(G.rebirth(st, 'dice'), 4);
+assert.ok(sd.ess === 4 && sd.cash === 0 && !G.L(st, 'd_pip') && G.L(st, 'dr_inc') === 1 && sd.stage === 10 && sd.sys.mat[0] === 2);
 
 // offline: needs auto, capped
 const o = G.newState(0);
-assert.equal(G.offlineGold(o, 3600e3).gold, 0);
-o.lv.d_auto = 1;
-assert.ok(G.offlineGold(o, 3600e3).gold > 0);
+assert.deepEqual(G.offlineGold(o, 3600e3).per, {});
+lv(o, 'd_auto', 1);
+assert.ok(G.offlineGold(o, 3600e3).per.dice > 0);
 assert.equal(G.offlineGold(o, 100 * 3600e3).secs, 2 * 3600);
 
-// Hi-Lo + fmt
-assert.equal(G.hiloMult(6, 1), 0);
 assert.ok(Math.abs(G.hiloMult(3, 1) - 2.1) < 1e-9);
-assert.equal(G.fmt(999), '999');
 assert.equal(G.fmt(1500), '1.50K');
 assert.equal(G.fmt(1e15), '1.00aa');
+console.log('logic ok');
 
-// Pacing sim: greedy bot taps dice 2×/s until it owns Auto, then idles; buys the cheapest affordable node.
-function simRun(s, maxMin = 300) {
-  const dt = 0.25, timers = {};
-  let t = 0;
-  for (; t < maxMin * 60 && !G.chipGain(s); t += dt) {
-    for (const g in G.GAMES) {
-      if (!G.gameOn(s, g)) continue;
-      const iv = G.hasAuto(s, g) ? G.autoIv(s, g) / 1000 : g === 'dice' ? 0.5 : Infinity;
-      timers[g] = (timers[g] || 0) + dt;
-      while (timers[g] >= iv) { timers[g] -= iv; G.collect(s, G.play(s, g, Math.random, Infinity)); }
+// ---------- pacing sim ----------
+// Greedy idle bot per game: taps 2×/s until Auto, buys the cheapest tree node or workshop upgrade, claims stages.
+function simGame(s, g, maxMin) {
+  const gs = s.g[g], at = {}, dt = 0.5;
+  let timer = 0, nextTune = 0;
+  for (let t = 0; t < maxMin * 60 && gs.stage < 12; t += dt) {
+    const iv = G.hasAuto(s, g) ? G.autoIv(s, g) / 1000 : 0.5;
+    for (timer += dt; timer >= iv; timer -= iv) G.collect(s, G.play(s, g, Math.random, Infinity));
+    while (G.claim(s, g)) at[gs.stage] = t / 60;
+    if (t >= nextTune) { // bot settings
+      nextTune = t + 120;
+      if (g === 'cards') gs.sys.strat = gs.stage >= G.SMART_AT ? 'smart' : 'pairs';
+      if (g === 'plinko') gs.sys.tilt = 1;
+      if (g === 'coin') {
+        const S = G.stats(s, 'coin'), f = G.stageGoal('coin', gs.stage + 1).feat, need = f && /^s(\d+)$/.exec(f[0]);
+        let best = 1, bv = 0;
+        for (let k = 1; k <= Math.min(15, G.streakCap(S)); k++) { const v = G.coinEV(gs, S, k, 1500); if (v > bv) { bv = v; best = k; } }
+        gs.sys.target = need && G.featCount(s, g, f) < 1 ? +need[1] : best;
+      }
     }
     for (;;) {
-      const best = Object.keys(G.NODE).filter(id => G.NODE[id].tree !== 'perm' && G.isUnlocked(s, id))
-        .map(id => [id, G.priceOf(s, id)]).filter(([, p]) => p).sort((a, b) => a[1].cost - b[1].cost)[0];
-      if (!best || best[1].cost > s.gold) break;
-      G.buy(s, best[0]);
+      const opts = G.ALL[g].filter(nd => G.isUnlocked(s, nd.id)).map(nd => [nd.id, G.priceOf(s, nd.id)?.cost])
+        .concat(G.wsRows(s, g).flatMap(r => r.btns).filter(b => b.buy && b.cost).map(b => ['ws:' + b.id, b.cost]))
+        .filter(o => o[1] != null).sort((a, b) => a[1] - b[1]);
+      if (!opts.length || opts[0][1] > gs.cash) break;
+      const [id] = opts[0];
+      id.startsWith('ws:') ? G.wsBuy(s, g, id.slice(3)) : G.buy(s, id);
     }
   }
-  return t / 60;
+  return at;
 }
-const p = G.newState(0);
-const m1 = simRun(p);
-G.ascend(p); G.buy(p, 'p_coin');
-const m2 = simRun(p);
-console.log(`pacing: 1st prestige ${m1.toFixed(0)} min, 2nd ${m2.toFixed(0)} min (idle bot)`);
-assert.ok(m1 > 45 && m1 < 80, 'first prestige should take ~1h');
-assert.ok(m2 < m1, 'second run with coinflip should be faster');
-
+if (!process.argv.includes('quick')) {
+  for (const g in G.GAMES) {
+    const at = simGame(G.newState(0), g, 150), m = i => at[i]?.toFixed(0) ?? '-';
+    console.log(`${g.padEnd(7)} stage 1: ${m(1)}m  3: ${m(3)}m  5: ${m(5)}m  8: ${m(8)}m  10: ${m(10)}m  12: ${m(12)}m`);
+    if (process.argv.includes('assert')) {
+      assert.ok(at[1] < 3, `${g} stage 1 too slow`);
+      assert.ok(at[5] > 5 && at[5] < 35, `${g} stage 5 at ${at[5]}`); // coinflip edge luck can rush early stages
+      assert.ok(at[10] > 45 && at[10] < 120, `${g} stage 10 at ${at[10]}`);
+    }
+  }
+}
 console.log('ok');

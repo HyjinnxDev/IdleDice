@@ -17,8 +17,8 @@
 <body>
 <div id="app">
   <header id="bar">
-    <div class="stat" id="goldstat"><span>🪙</span><b id="gold">0</b><small id="gps"></small></div>
-    <div class="stat chips"><span>🎰</span><b id="chips">0</b></div>
+    <div class="stat" id="goldstat"><span id="curi">⚀</span><b id="gold">0</b><small id="gps"></small></div>
+    <div class="stat chips" title="Casino level: stages cleared across all games"><span>🏛️</span><b id="clv">0</b></div>
   </header>
 
   <main id="play">
@@ -32,6 +32,7 @@
     </section>
     <div id="controls">
       <button id="go">ROLL</button>
+      <button id="alt" hidden></button>
       <button id="autobtn" hidden>AUTO<small>ON</small></button>
     </div>
   </main>
@@ -39,8 +40,10 @@
   <aside id="panel">
     <nav id="tabs">
       <button data-tab="tree" class="on">Upgrades</button>
-      <button data-tab="perm">Prestige</button>
-      <button data-tab="hilo">Hi-Lo</button>
+      <button data-tab="ws" id="wstab">Workshop</button>
+      <button data-tab="stages">Stages</button>
+      <button data-tab="rb">Rebirth</button>
+      <button data-tab="hilo" aria-label="Hi-Lo">🎟️</button>
       <button data-tab="cfg" aria-label="Settings">⚙</button>
     </nav>
     <div id="sheet"></div>

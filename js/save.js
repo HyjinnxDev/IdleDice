@@ -1,6 +1,6 @@
 import { newState } from './game.js';
 
-const KEY = 'dicedepths-v2';
+const KEY = 'dicedepths-v3';
 
 // Fill keys missing from older saves with defaults.
 function merge(def, s) {
@@ -12,7 +12,7 @@ function merge(def, s) {
 }
 
 function hydrate(s) {
-  if (!s || typeof s !== 'object' || s.v !== 2 || !s.lv || typeof s.lv !== 'object') throw new Error('Invalid save');
+  if (!s || typeof s !== 'object' || s.v !== 3 || !s.g || typeof s.g !== 'object') throw new Error('Invalid save');
   return merge(newState(), s);
 }
 

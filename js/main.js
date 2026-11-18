@@ -1,26 +1,26 @@
 import * as G from './game.js';
+import * as V from './view.js';
 import { load, save, exportSave, importSave, wipe } from './save.js';
 import { renderHilo, hiloAct, hiloSig } from './hilo.js';
 
 const $ = id => document.getElementById(id);
 const rand = (a, b) => a + Math.random() * (b - a);
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-// cube rotation [x, y] that shows each face to the viewer
-const SHOW = { 1: [0, 0], 2: [-90, 0], 3: [0, -90], 4: [0, 90], 5: [90, 0], 6: [0, 180] };
-const DUR = { dice: 420, coin: 600, cards: 650 };
-const HUE = { dice: 260, coin: 35, cards: 150 };
-const RANKS = '..23456789TJQKA', SUITS = '♠♥♦♣';
+const GK = Object.keys(G.GAMES);
 
 let s = load();
-let busy = false, nextGolden = Date.now() + rand(40, 90) * 1000, rate = 0;
-let tab = 'tree', stageKey = '', hiloResult = '', sheetSig = '', onConfirm = null, floats = 0;
-const nextAuto = {}, sel = {};
+let busy = false, nextGolden = Date.now() + rand(40, 90) * 1000;
+let tab = 'tree', hiloResult = '', sheetSig = '', onConfirm = null, floats = 0;
+const nextAuto = {}, sel = {}, rate = {}, lastTotal = {};
 
 // ---------- small DOM helpers ----------
 const setText = (el, t) => { t = String(t); if (el.textContent !== t) el.textContent = t; };
 const setHtml = (el, h) => { if (el._h !== h) { el.innerHTML = h; el._h = h; } };
 function restart(el, cls) { el.classList.remove(cls); void el.offsetWidth; el.classList.add(cls); }
 const center = el => { const r = el.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; };
+const gs = () => s.g[s.view];
+const ci = (g = s.view) => G.GAMES[g].ci;
+const bar = (id, frac, text) => { $(id + 'f').style.width = Math.min(100, frac * 100) + '%'; setText($(id + 't'), text); };
 
 // ---------- FX ----------
 const cv = $('fx'), ctx = cv.getContext('2d');
@@ -75,7 +75,7 @@ function coinFly(x, y, n) {
   const [tx, ty] = center($('goldstat'));
   for (let i = 0; i < n; i++) {
     const c = document.createElement('div');
-    c.className = 'coin'; c.textContent = '🪙';
+    c.className = 'coin'; c.textContent = ci();
     Object.assign(c.style, { left: x - 9 + 'px', top: y - 9 + 'px' });
     document.body.append(c);
     c.animate([
@@ -92,92 +92,6 @@ function shake(big) {
   restart($('app'), big ? 'bigshake' : 'shake');
 }
 
-// ---------- stage (one renderer per game) ----------
-const count = g => (g === 'dice' ? 1 + G.L(s, 'd_die') + G.L(s, 'd_six') : g === 'coin' ? G.coinCount(s) : 5 + G.L(s, 'k_extra'));
-const tierOf = g => Math.min(7, G.L(s, { dice: 'd_mat', coin: 'c_mint', cards: 'k_foil' }[g]));
-
-function buildStage() {
-  const g = s.view, n = count(g), tier = tierOf(g), key = `${g}${n}|${tier}`;
-  if (key === stageKey) return;
-  stageKey = key;
-  const t = $('table'), many = k => Array.from({ length: n }, () => k).join('');
-  t.className = `g-${g}${g === 'cards' && tier ? ' foil' : ''}`;
-  $('app').style.setProperty('--hue', HUE[g]);
-  if (g === 'dice') {
-    const faces = [1, 2, 3, 4, 5, 6].map(f => `<div class="face f${f}">${'<i></i>'.repeat(f)}</div>`).join('');
-    t.innerHTML = many(`<div class="die t${tier}"><div class="cube">${faces}</div><span class="val"></span></div>`);
-  } else if (g === 'coin') {
-    t.innerHTML = many(`<div class="coin3d t${tier}"><div class="spin"><div class="cface h">♛</div><div class="cface tl">✦</div></div></div>`);
-  } else {
-    t.innerHTML = many('<div class="pcard"><div class="in"><div class="fr"></div><div class="bk"></div></div></div>');
-  }
-}
-
-const ANIM = {
-  dice(r, dur) {
-    const els = $('table').children, counts = [0, 0, 0, 0, 0, 0, 0];
-    r.faces.forEach(f => counts[f]++);
-    r.faces.forEach((f, i) => {
-      const el = els[i];
-      if (!el) return;
-      el._t = (el._t || 0) + 1 + Math.floor(Math.random() * 2);
-      const [x, y] = SHOW[f], turns = el._t * 360;
-      el.style.setProperty('--dur', dur + 'ms');
-      el.firstChild.style.transform = `rotateZ(${rand(-14, 14)}deg) rotateX(${x + turns}deg) rotateY(${y + turns}deg)`;
-      el.classList.remove('hl');
-      restart(el, 'hop');
-      el._hl = r.combo.mult > 1 && (counts[f] >= 2 || r.combo.name === 'Straight');
-    });
-  },
-  coin(r, dur) {
-    [...$('table').children].forEach((el, i) => {
-      const f = r.flips[i];
-      if (!f) return;
-      el._t = (el._t || 0) + 3 + Math.floor(Math.random() * 2);
-      el.style.setProperty('--dur', dur + 'ms');
-      el.firstChild.style.transform = `rotateX(${el._t * 360 + (f === 'T' ? 180 : 0)}deg)`;
-      el.classList.remove('hl', 'edge');
-      restart(el, 'hop');
-      el._f = f;
-    });
-  },
-  cards(r, dur) {
-    const els = [...$('table').children], fl = Math.min(250, dur * 0.35), step = Math.max(0, (dur - 2 * fl) / els.length);
-    els.forEach((el, i) => {
-      const c = r.cards[i];
-      if (!c) return;
-      el.style.setProperty('--fl', fl + 'ms');
-      el.classList.remove('up', 'hl');
-      setTimeout(() => {
-        const fr = el.querySelector('.fr');
-        fr.innerHTML = `${c.r === 10 ? '10' : RANKS[c.r]}<small>${SUITS[c.s]}</small>`;
-        fr.classList.toggle('red', c.s === 1 || c.s === 2);
-        el.classList.add('up');
-      }, fl + i * step);
-    });
-  },
-};
-
-const LAND = {
-  dice(r) {
-    const els = $('table').children;
-    r.values.forEach((v, i) => {
-      const el = els[i];
-      if (!el) return;
-      el.classList.toggle('hl', !!el._hl);
-      el.lastChild.textContent = G.fmt(v);
-      restart(el.lastChild, 'show');
-    });
-  },
-  coin() { for (const el of $('table').children) { el.classList.toggle('hl', el._f === 'H'); el.classList.toggle('edge', el._f === 'E'); } },
-  cards(r) { const els = $('table').children; r.hand.used.forEach(i => els[i]?.classList.add('hl')); },
-};
-
-// 0 = plain … 3 = huge (jackpot / edge / straight flush+)
-const bigness = r => (r.g === 'dice' ? (r.combo.mult >= 20 ? 3 : r.combo.mult >= 5 ? 2 : r.combo.mult >= 3 ? 1 : 0)
-  : r.g === 'coin' ? (r.flips.includes('E') ? 3 : r.streak >= 8 ? 2 : r.streak >= 4 ? 1 : 0)
-  : r.hand.rank >= 8 ? 3 : r.hand.rank >= 5 ? 2 : r.hand.rank >= 3 ? 1 : 0);
-
 function showCombo(label, huge) {
   const el = $('combo');
   el.textContent = huge ? label.toUpperCase() + '!!' : label;
@@ -191,30 +105,34 @@ function doPlay(auto) {
   if (busy) return;
   busy = true;
   const now = Date.now(), iv = G.autoIv(s, g, now);
-  const dur = reduced ? 120 : auto ? Math.min(DUR[g], iv * 0.75) : DUR[g];
-  if (auto) nextAuto[g] = now + iv;
-  const r = G.play(s, g, Math.random, now);
-  buildStage();
-  ANIM[g](r, dur);
-  setTimeout(() => { busy = false; land(r); }, dur);
+  const dur = reduced ? 120 : auto ? Math.min(V.DUR[g], iv * 0.75) : V.DUR[g];
+  const r = G.play(s, g, Math.random, now), len = V.animLen(r, dur);
+  if (auto) nextAuto[g] = now + Math.max(iv, len);
+  V.buildStage(s);
+  V.ANIM[g](r, dur);
+  setTimeout(() => { busy = false; land(r); }, len);
+}
+
+function payout(x, x0, y0, big) {
+  setText($('payout'), x ? `+${ci()} ${G.fmt(x)}` : '');
+  restart($('payout'), 'show');
+  if (big >= 2) { shake(big >= 3); coinFly(x0, y0, big >= 3 ? 10 : 4); }
+  if (big >= 3) { if (!reduced) flash = 0.7; burst(x0, y0, 90, ['#ff5ea8', '#7a5cff', '#3ad1ff', '#ffd000', '#fff']); }
+  else if (big >= 1) burst(x0, y0, big * 12 + 6, ['#ffc94a', '#fff', '#ff8f3d']);
 }
 
 function land(r) {
-  const hadTickets = s.tickets;
+  const hadTickets = s.tickets, couldClaim = G.canClaim(s, r.g);
   G.collect(s, r);
-  const big = bigness(r), [cx, cy] = center($('table'));
+  const [cx, cy] = center($('table'));
   if (r.g === s.view) {
-    LAND[r.g](r);
-    setText($('payout'), '+🪙 ' + G.fmt(r.gold));
-    restart($('payout'), 'show');
+    V.LAND[r.g](r);
+    payout(r.gold, cx, cy, r.big);
     if (r.crit) floatText('CRIT!', cx + rand(-40, 40), cy - 40, 'crit');
-    if (r.label) showCombo(r.label, big >= 3);
-    if (big >= 2) { shake(big >= 3); coinFly(cx, cy, big >= 3 ? 10 : 4); }
-    if (big >= 3) { if (!reduced) flash = 0.7; burst(cx, cy, 90, ['#ff5ea8', '#7a5cff', '#3ad1ff', '#ffd000', '#fff']); }
-    else if (big >= 1 || r.crit) burst(cx, cy, big * 12 + 6, ['#ffc94a', '#fff', '#ff8f3d']);
-  } else if (big >= 3) toast(`${G.GAMES[r.g].icon} ${r.label}`, 'gold');
-  restart($('goldstat'), 'pulse');
+    if (r.label) showCombo(r.label, r.big >= 3);
+  } else if (r.big >= 3) toast(`${G.GAMES[r.g].icon} ${r.label}`, 'gold');
   if (s.tickets > hadTickets) floatText('+1 🎟️ Hi-Lo ticket', cx, cy - 70, 'info');
+  if (!couldClaim && G.canClaim(s, r.g)) toast(`${G.GAMES[r.g].icon} Stage ${s.g[r.g].stage + 1} ready to claim!`, 'gold');
 }
 
 // ---------- golden die ----------
@@ -233,15 +151,15 @@ function spawnGolden() {
 }
 
 function goldenEffect(x, y) {
-  const now = Date.now(), anyAuto = Object.keys(G.GAMES).some(g => G.hasAuto(s, g));
+  const now = Date.now(), anyAuto = GK.some(g => G.hasAuto(s, g));
   let p = Math.random();
   if (!anyAuto && p >= 0.75) p = 0.5;
   burst(x, y, 50, ['#ffd000', '#fff', '#ffe680']);
-  if (p < 0.4) { s.buffs.frenzy = now + 15000; floatText('FRENZY! ×7 income', x, y, 'crit'); }
+  if (p < 0.4) { s.buffs.frenzy = now + 15000; floatText('FRENZY! ×7 all games', x, y, 'crit'); }
   else if (p < 0.75) {
-    const g = Math.max(50, Math.floor(rate * 600));
-    G.earn(s, g); lastEarned += g; // lumps don't inflate the /s readout
-    floatText(`LUCKY! +🪙${G.fmt(g)}`, x, y, 'gold');
+    const g = s.view, amt = Math.max(50, Math.floor((rate[g] || 0) * 600 * G.luckyMult(s)));
+    G.earn(s, g, amt); lastTotal[g] += amt; // lumps don't inflate the /s readout
+    floatText(`LUCKY! +${ci()}${G.fmt(amt)}`, x, y, 'gold');
     coinFly(x, y, 10);
   } else {
     s.buffs.overdrive = now + 10000;
@@ -266,30 +184,31 @@ $('modal').addEventListener('click', e => {
 
 // ---------- upgrade trees ----------
 const RH = 92, CW = 76; // row height, column width px
-const curTree = () => (tab === 'perm' ? 'perm' : s.view);
-const curSel = () => sel[curTree()] ?? G.TREES[curTree()][0].id;
+const curTree = () => (tab === 'rb' ? s.view + '_r' : s.view);
+const curSel = () => sel[curTree()] ?? G.ALL[curTree()][0].id;
 
 function treeHtml(id) {
-  const nodes = G.TREES[id], h = (Math.max(...nodes.map(n => n.y)) + 1) * RH, X = x => (x + 0.5) * CW;
+  const nodes = G.ALL[id], h = (Math.max(...nodes.map(n => n.y)) + 1) * RH, X = x => (x + 0.5) * CW;
   const w = (Math.max(...nodes.map(n => n.x)) + 1) * CW;
   const lines = nodes.flatMap(n => n.req.map(p => {
     const a = G.NODE[p];
     return `<line data-a="${p}" x1="${X(a.x)}" y1="${a.y * RH + 34}" x2="${X(n.x)}" y2="${n.y * RH + 34}"/>`;
   })).join('');
+  const tiers = id.endsWith('_r') ? '' : [3, 5, 7].map(y => `<div class="tier" style="top:${y * RH - 10}px"><span>Stage ${G.TIER_ST[y]}</span></div>`).join('');
   return `<div class="infobar"><span class="ico" id="ii"></span><div class="info"><b id="in"></b> <small id="il"></small><p id="idesc"></p></div>
     <div class="buys"><button class="buy" data-buy id="ib"></button><button class="btn sm" data-max>Max</button></div></div>
-    <div class="treewrap"><div class="tree" style="width:${w}px;height:${h}px"><svg viewBox="0 0 ${w} ${h}">${lines}</svg>
+    <div class="treewrap"><div class="tree" style="width:${w}px;height:${h}px">${tiers}<svg viewBox="0 0 ${w} ${h}">${lines}</svg>
     ${nodes.map(n => `<button class="node" data-node="${n.id}" style="left:${X(n.x)}px;top:${n.y * RH + 2}px"><span class="ico">${n.icon}</span><span class="lv"></span><span class="nm">${n.name}</span></button>`).join('')}</div></div>`;
 }
 
 function updateTree() {
-  const id = curSel(), cur = c => (c === 'chips' ? '🎰' : '🪙');
+  const id = curSel(), cur = c => (c === 'ess' ? '✦' : ci());
   for (const b of $('sheet').querySelectorAll('.node')) {
     const nd = G.NODE[b.dataset.node], lvl = G.L(s, nd.id), p = G.priceOf(s, nd.id), open = G.isUnlocked(s, nd.id);
     b.classList.toggle('lock', !open);
     b.classList.toggle('own', lvl > 0);
     b.classList.toggle('max', !p);
-    b.classList.toggle('ok', open && !!p && s[p.cur] >= p.cost);
+    b.classList.toggle('ok', open && !!p && s.g[nd.game][p.cur] >= p.cost);
     b.classList.toggle('sel', nd.id === id);
     setText(b.children[1], nd.max === 1 ? (lvl ? '✓' : '') : nd.max >= 100 ? (lvl || '') : `${lvl}/${nd.max}`);
   }
@@ -298,54 +217,94 @@ function updateTree() {
   setText($('ii'), nd.icon);
   setText($('in'), nd.name);
   setText($('il'), nd.max === 1 ? '' : nd.max >= 100 ? `Lv ${lvl}` : `Lv ${lvl}/${nd.max}`);
-  setText($('idesc'), open ? nd.desc : 'Locked: buy a connected upgrade first');
+  setText($('idesc'), open ? nd.desc : s.g[nd.game].stage < nd.st ? `Unlocks at stage ${nd.st} · ${nd.desc}` : `Buy a connected upgrade first · ${nd.desc}`);
   setText(ib, !p ? 'MAX' : `${cur(p.cur)}${G.fmt(p.cost)}`);
   ib.disabled = !p || !open;
-  ib.classList.toggle('ok', open && !!p && s[p.cur] >= p.cost);
-  ib.classList.toggle('chips', p?.cur === 'chips');
+  ib.classList.toggle('ok', open && !!p && s.g[nd.game][p.cur] >= p.cost);
+  ib.classList.toggle('chips', p?.cur === 'ess');
 }
 
 function buyFx(x, y, id) {
-  burst(x, y, 14, G.NODE[id].tree === 'perm' ? ['#7ee0ff', '#fff'] : ['#ffc94a', '#fff']);
+  burst(x, y, 14, G.NODE[id].rb ? ['#7ee0ff', '#fff'] : ['#ffc94a', '#fff']);
   updateUi();
 }
 
 // ---------- panel ----------
+const progHtml = id => `<div class="prog"><div id="${id}f" class="pfill"></div><span id="${id}t" class="ptext"></span></div>`;
+
+function stagesHtml() {
+  const g = s.view, d = G.GAMES[g], st = gs().stage, i = st + 1;
+  if (i > G.MAX_STAGE) return `<div class="hero"><h3>All ${G.MAX_STAGE} stages cleared!</h3></div>`;
+  const goal = G.stageGoal(g, i), ms = [[3, 'Upgrade rows 4–5'], [8, 'Upgrade rows 6–7'], [G.REBIRTH_AT, 'Rebirth'], [15, 'Upgrade rows 8–9']];
+  if (g === 'cards') ms.push([G.SMART_AT, 'Smart strategy']);
+  const next = ms.filter(([n]) => n > st).sort((a, b) => a[0] - b[0]);
+  const lv = G.casinoLv(s);
+  return `<div class="hero stagehero"><h3>${d.icon} ${d.name} · Stage ${i} <small>/ ${G.MAX_STAGE}</small></h3>
+      <p class="goal">Earn ${d.ci} ${G.fmt(goal.earn)} total</p>${progHtml('s1')}
+      ${goal.feat ? `<p class="goal">${goal.feat[2]}</p>${progHtml('s2')}` : ''}
+      <button class="btn wide primary" data-cmd="claim" id="claim">Claim stage ${i}</button>
+      <p class="note">Each stage: +${Math.round((0.05 + (G.stats(s, g).stg || 0)) * 100)}% ${d.cur} income for good (now ×${G.stageMult(s, g).toFixed(2)}).</p></div>
+    ${next.length ? `<p class="note"><b>Next unlocks:</b> ${next.map(([n, t]) => `stage ${n}: ${t}`).join(' · ')}</p>` : ''}
+    <div class="row"><span class="ico">🏛️</span><div class="info"><b>Casino Lv ${lv}</b><p>Stages cleared in all games. Offline cap ${G.offlineCapH(s).toFixed(1)}h · golden dice +${lv}% · ${G.maxTickets(s)} ticket cap</p></div></div>
+    ${GK.map(k => `<div class="row mini"><span class="ico">${G.GAMES[k].icon}</span><div class="info"><b>${G.GAMES[k].name}</b> <small>stage ${s.g[k].stage}${s.g[k].rebirths ? ` · ${s.g[k].rebirths} rebirths` : ''}</small></div>${G.canClaim(s, k) ? '<span class="ready">Claim!</span>' : ''}</div>`).join('')}`;
+}
+
+function rebirthHtml() {
+  const g = s.view, d = G.GAMES[g], x = gs();
+  if (x.stage < G.REBIRTH_AT) return `<div class="hero"><h3>🔒 Rebirth</h3><p class="note">Reach ${d.name} stage ${G.REBIRTH_AT} to unlock. Rebirth resets ${d.cur} and the upgrade tree for ✦ Essence, which buys permanent ${d.name} upgrades.</p>
+    <p class="goal">Stage ${x.stage} / ${G.REBIRTH_AT}</p></div>`;
+  return `<div class="hero"><p class="goal">✦ <b id="essv"></b> ${d.name} Essence</p>${progHtml('r1')}
+    <div class="big">+✦ <span id="rgain"></span></div>
+    <button class="btn wide primary" data-cmd="rebirth" id="rbbtn"></button>
+    <p class="note">Resets ${d.cur} and ${d.name} upgrades. Keeps stages, workshop and this tree.</p></div>` + treeHtml(g + '_r');
+}
+
 function renderSheet() {
   const el = $('sheet');
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
+  setText($('wstab'), G.WS_NAME[s.view]);
   el._h = null;
   if (tab === 'tree') el.innerHTML = treeHtml(s.view);
-  else if (tab === 'perm') {
-    el.innerHTML = `<div class="hero"><div class="prog"><div id="pfill"></div><span id="ptext"></span></div>
-      <div class="big">+🎰 <span id="cgain"></span></div>
-      <button class="btn wide primary" data-cmd="ascend" id="ascbtn"></button>
-      <p class="note">Prestige resets gold and game upgrades. Chips and this tree are permanent.</p></div>` + treeHtml('perm');
-  } else if (tab === 'hilo') {
-    renderHilo(el, s, hiloResult);
-    sheetSig = hiloSig(s);
-  } else {
+  else if (tab === 'ws') el.innerHTML = V.wsHtml(s, s.view);
+  else if (tab === 'stages') el.innerHTML = stagesHtml();
+  else if (tab === 'rb') el.innerHTML = rebirthHtml();
+  else if (tab === 'hilo') { renderHilo(el, s, hiloResult); sheetSig = hiloSig(s); }
+  else {
     el.innerHTML = `<div class="cfg">
-      <p class="note">Plays ${s.stats.plays} · Jackpots ${s.stats.jackpots} · Prestiges ${s.stats.prestiges} · Lifetime 🪙 ${G.fmt(s.stats.earned)} · Lifetime 🎰 ${G.fmt(s.totalChips)}</p>
+      <p class="note">Plays ${s.stats.plays} · Casino Lv ${G.casinoLv(s)} · ${GK.map(g => `${G.GAMES[g].icon} ${G.fmt(s.g[g].total)}`).join(' · ')} lifetime</p>
       <p class="note">Saves automatically. Home-screen apps on iPhone keep separate storage from Safari, so export to back up or move a save.</p>
       <textarea id="savebox" placeholder="Paste a save here, then Import"></textarea>
       <div class="btns"><button class="btn" data-cmd="export">Export</button><button class="btn" data-cmd="import">Import</button></div>
-      <button class="btn" data-cmd="unlockall">🧪 Unlock all games (test)</button>
       <button class="btn danger" data-cmd="reset">Hard reset</button></div>`;
   }
+  if (tab === 'stages') sheetSig = `${s.view}|${gs().stage}`;
+  if (tab === 'rb') sheetSig = `${s.view}|${gs().stage >= G.REBIRTH_AT}`;
   updateSheet();
 }
 
 function updateSheet() {
-  if (tab === 'tree' || tab === 'perm') updateTree();
-  if (tab === 'perm') {
-    const gain = G.chipGain(s), btn = $('ascbtn');
-    const next = gain ? G.PRESTIGE_AT * ((gain + 1) / 3) ** 2 : G.PRESTIGE_AT;
-    $('pfill').style.width = Math.min(100, (s.runEarned / next) * 100) + '%';
-    setText($('ptext'), `${G.fmt(s.runEarned)} / ${G.fmt(next)} earned${gain ? ' (next chip)' : ''}`);
-    setText($('cgain'), G.fmt(gain));
-    setText(btn, gain ? 'Prestige' : `Earn 🪙${G.fmt(G.PRESTIGE_AT)} this run`);
-    btn.disabled = !gain;
+  const g = s.view, x = gs();
+  if (tab === 'tree' || tab === 'rb') { if ($('ib')) updateTree(); }
+  if (tab === 'ws' && V.wsUpdate($('sheet'), s, g)) renderSheet();
+  if (tab === 'stages') {
+    if (sheetSig !== `${g}|${x.stage}`) return renderSheet();
+    const goal = G.stageGoal(g, x.stage + 1);
+    if (x.stage >= G.MAX_STAGE) return;
+    bar('s1', x.total / goal.earn, `${G.fmt(x.total)} / ${G.fmt(goal.earn)}`);
+    if (goal.feat) { const c = G.featCount(s, g, goal.feat); bar('s2', c / goal.feat[1], `${Math.min(c, goal.feat[1])} / ${goal.feat[1]}`); }
+    $('claim').disabled = !G.canClaim(s, g);
+  }
+  if (tab === 'rb') {
+    if (sheetSig !== `${g}|${x.stage >= G.REBIRTH_AT}`) return renderSheet();
+    if (x.stage >= G.REBIRTH_AT) {
+      const gain = G.essGain(s, g), R = G.stageGoal(g, G.REBIRTH_AT).earn, m = 1 + (G.stats(s, g).essm || 0);
+      const next = R * ((gain + 1) / (2 * m)) ** 2;
+      bar('r1', x.earned / next, `${G.fmt(x.earned)} / ${G.fmt(next)} this run → next ✦`);
+      setText($('essv'), G.fmt(x.ess));
+      setText($('rgain'), G.fmt(gain));
+      setText($('rbbtn'), gain ? `Rebirth for ✦${G.fmt(gain)}` : 'Earn more this run');
+      $('rbbtn').disabled = !gain;
+    }
   }
   if (tab === 'hilo' && hiloSig(s) !== sheetSig) renderSheet();
 }
@@ -373,7 +332,10 @@ $('sheet').addEventListener('click', e => {
     let n = 0;
     while (G.buy(s, curSel())) n++;
     if (n) { buyFx(e.clientX, e.clientY, curSel()); floatText(`+${n}`, e.clientX, e.clientY - 20, 'gold'); }
-  } else if (b.dataset.cmd) cmd(b.dataset.cmd);
+  } else if (b.dataset.ws) {
+    const paid = +b.dataset.cost > 0;
+    if (G.wsBuy(s, s.view, b.dataset.ws)) { if (paid) burst(e.clientX, e.clientY, 14, ['#ffc94a', '#fff']); renderSheet(); updateUi(); }
+  } else if (b.dataset.cmd) cmd(b.dataset.cmd, e);
   else if (b.dataset.hilo) {
     const r = hiloAct(s, b.dataset.hilo);
     hiloResult = r ? `<p class="result ${r.win ? 'win' : 'lose'}">${r.msg}</p>` : '';
@@ -386,85 +348,92 @@ $('sheet').addEventListener('click', e => {
 
 $('games').addEventListener('click', e => {
   const b = e.target.closest('button');
-  if (!b || b.dataset.game === s.view) return;
-  if (!G.gameOn(s, b.dataset.game)) { toast('Unlock it in the Prestige tree 🎰'); return; }
+  if (!b || b.dataset.game === s.view || busy) return;
   s.view = b.dataset.game;
-  if (tab === 'tree') renderSheet();
+  V.resetStage();
+  setText($('payout'), '');
+  renderSheet();
   updateUi();
 });
 
-const resetView = () => { stageKey = ''; for (const g in nextAuto) nextAuto[g] = 0; save(s); renderSheet(); updateUi(); };
+$('alt').addEventListener('click', e => { // coinflip: bank the pot now
+  const x = G.bankNow(s);
+  if (!x) return;
+  const [cx, cy] = center($('table'));
+  payout(x, cx, cy, 1);
+  showCombo('BANKED!', false);
+  updateUi();
+});
 
-async function cmd(c) {
-  if (c === 'ascend') {
-    confirmModal(`<h2>Prestige?</h2><p>Gain <b style="color:var(--ether)">🎰 ${G.fmt(G.chipGain(s))}</b> chips.<br>Gold and all game upgrades reset.</p>`, 'Prestige 🎰', () => {
-      const g = G.ascend(s);
+const resetView = () => { V.resetStage(); for (const g in nextAuto) nextAuto[g] = 0; save(s); renderSheet(); updateUi(); };
+
+async function cmd(c, e) {
+  const g = s.view;
+  if (c === 'claim') {
+    if (!G.claim(s, g)) return;
+    flash = reduced ? 0 : 0.5;
+    burst(e.clientX, e.clientY, 60, ['#ffd000', '#fff', '#7ee0ff']);
+    toast(`Stage ${gs().stage} cleared!`, 'gold');
+    resetView();
+  } else if (c === 'rebirth') {
+    confirmModal(`<h2>Rebirth ${G.GAMES[g].name}?</h2><p>Gain <b style="color:var(--ether)">✦ ${G.fmt(G.essGain(s, g))}</b> Essence.<br>${G.GAMES[g].cur} and ${G.GAMES[g].name} upgrades reset. Stages and workshop stay.</p>`, 'Rebirth ✦', () => {
+      const x = G.rebirth(s, g);
       flash = reduced ? 0 : 0.8;
       burst(innerWidth / 2, innerHeight / 2, 100, ['#7ee0ff', '#fff', '#a874ff']);
       resetView();
-      toast(`+🎰 ${G.fmt(g)} chips`);
+      toast(`+✦ ${G.fmt(x)} Essence`);
     });
   } else if (c === 'export') {
     const str = exportSave(s);
     $('savebox').value = str;
     try { await navigator.clipboard.writeText(str); toast('Save copied'); } catch { $('savebox').select(); toast('Copy the text above'); }
   } else if (c === 'import') {
-    try { s = importSave($('savebox').value); resetView(); toast('Save loaded'); } catch { toast('Invalid save', 'bad'); }
-  } else if (c === 'unlockall') { // ponytail: test helper, remove before real release
-    for (const g in G.GAMES) if (G.GAMES[g].unlock) s.lv[G.GAMES[g].unlock] = 1;
-    resetView(); toast('All games unlocked');
+    try { s = importSave($('savebox').value); for (const k of GK) lastTotal[k] = s.g[k].total; resetView(); toast('Save loaded'); } catch { toast('Invalid save', 'bad'); }
   } else if (c === 'reset') {
-    confirmModal('<h2>Hard reset?</h2><p>Erases everything, including chips. Cannot be undone.</p>', 'Erase', () => {
-      wipe(); s = G.newState(); resetView();
+    confirmModal('<h2>Hard reset?</h2><p>Erases everything in all five games. Cannot be undone.</p>', 'Erase', () => {
+      wipe(); s = G.newState(); for (const k of GK) lastTotal[k] = 0; resetView();
     });
   }
 }
 
 // ---------- HUD ----------
-function infoText(g) {
-  const auto = G.hasAuto(s, g) ? ` · auto ${(G.autoIv(s, g) / 1000).toFixed(2)}s` : '';
-  if (g === 'dice') { const n = count(g); return `${n} ${G.TIERS[tierOf(g)]} ${n > 1 ? 'dice' : 'die'}${auto}`; }
-  if (g === 'coin') {
-    const cap = G.streakCap(s), st = s.coin.streak;
-    return `🔥 ${st}/${cap} · next heads ×${(G.streakGrowth(s) ** Math.min(cap, st + 1)).toFixed(2)} · ${Math.round((0.5 + 0.015 * G.L(s, 'c_weight')) * 100)}% heads${auto}`;
-  }
-  return `${count(g)} cards · ${G.deckSize(s)}-card deck${auto}`;
-}
-
 function updateUi(now = Date.now()) {
-  setText($('gold'), G.fmt(s.gold));
-  setText($('gps'), rate >= 1 ? G.fmt(rate) + '/s' : '');
-  setText($('chips'), G.fmt(s.chips));
-  setHtml($('games'), Object.entries(G.GAMES).map(([g, d]) => {
-    const on = G.gameOn(s, g);
-    return `<button data-game="${g}" class="${g === s.view ? 'on' : ''}${on ? '' : ' lock'}">${on ? d.icon : '🔒'} ${d.name}</button>`;
-  }).join(''));
-  buildStage();
+  const g = s.view, x = gs();
+  setText($('curi'), ci());
+  setText($('gold'), G.fmt(x.cash));
+  setText($('gps'), (rate[g] || 0) >= 1 ? G.fmt(rate[g]) + '/s' : '');
+  setText($('clv'), G.casinoLv(s));
+  setHtml($('games'), GK.map(k => `<button data-game="${k}" class="${k === g ? 'on' : ''}${G.canClaim(s, k) ? ' ready' : ''}">${G.GAMES[k].icon}<span>${G.GAMES[k].name}</span></button>`).join(''));
+  V.buildStage(s);
   const chips = [];
   if (now < s.buffs.frenzy) chips.push(`🔥 Frenzy ${Math.ceil((s.buffs.frenzy - now) / 1000)}s`);
   if (now < s.buffs.overdrive) chips.push(`⚡ Overdrive ${Math.ceil((s.buffs.overdrive - now) / 1000)}s`);
   setHtml($('buffs'), chips.map(c => `<span class="chip">${c}</span>`).join(''));
-  const g = s.view, ab = $('autobtn');
+  const ab = $('autobtn');
   ab.hidden = !G.hasAuto(s, g);
   ab.classList.toggle('on', !s.autoOff[g]);
   setText(ab.lastChild, s.autoOff[g] ? 'OFF' : 'ON');
+  const alt = $('alt'), pot = g === 'coin' ? x.sys.pot : 0;
+  alt.hidden = !pot;
+  if (pot) setHtml(alt, `BANK<small>${ci()}${G.fmt(pot)}</small>`);
   setText($('go'), G.GAMES[g].verb);
-  setText($('info'), infoText(g));
+  setText($('info'), V.infoText(s, g));
   document.querySelector('[data-tab=hilo]').classList.toggle('new', s.tickets > 0 && tab !== 'hilo');
-  document.querySelector('[data-tab=perm]').classList.toggle('new', G.chipGain(s) > 0 && tab !== 'perm');
+  document.querySelector('[data-tab=stages]').classList.toggle('new', G.canClaim(s, g) && tab !== 'stages');
   updateSheet();
 }
 
 // ---------- offline ----------
 const fmtTime = sec => (sec >= 3600 ? `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m` : `${Math.floor(sec / 60)}m`);
 function welcomeBack() {
-  const now = Date.now(), { gold, secs } = G.offlineGold(s, now);
+  const now = Date.now(), { per, secs } = G.offlineGold(s, now);
   s.last = now;
   for (const g in nextAuto) nextAuto[g] = 0;
-  if (!gold) return;
-  G.earn(s, gold); lastEarned += gold;
+  const games = Object.keys(per);
+  if (!games.length) return;
+  for (const g of games) { G.earn(s, g, per[g]); lastTotal[g] += per[g]; }
   modal(`<h2>Welcome back!</h2><p class="muted">Your tables kept playing for ${fmtTime(secs)}${secs >= G.offlineCapH(s) * 3600 ? ' (max)' : ''}.</p>
-    <div class="big">🪙 ${G.fmt(gold)}</div><button class="btn wide primary" data-close>Collect</button>`);
+    ${games.map(g => `<div class="big">${G.GAMES[g].ci} ${G.fmt(per[g])}</div>`).join('')}<button class="btn wide primary" data-close>Collect</button>`);
 }
 
 // ---------- input ----------
@@ -481,22 +450,26 @@ addEventListener('pagehide', () => save(s));
 setInterval(() => save(s), 10000);
 
 // ---------- loop ----------
-let lastT = performance.now(), lastUi = 0, lastRate = Date.now(), lastEarned = s.stats.earned;
+let lastT = performance.now(), lastUi = 0, lastRate = Date.now();
+for (const g of GK) lastTotal[g] = s.g[g].total;
 function frame(t) {
   const now = Date.now(), dt = Math.min(0.05, (t - lastT) / 1000);
   lastT = t;
   s.last = now;
-  for (const g in G.GAMES) {
+  for (const g of GK) {
     if (!G.hasAuto(s, g) || s.autoOff[g] || now < (nextAuto[g] || 0)) continue;
     if (g === s.view) { if (!busy) doPlay(true); continue; }
     nextAuto[g] = now + G.autoIv(s, g, now); // off-screen games play instantly
     land(G.play(s, g, Math.random, now));
   }
   if (now >= nextGolden) { spawnGolden(); nextGolden = now + (rand(60, 180) * 1000) / G.goldenRate(s); }
-  if (now - lastRate >= 1000) { // measured income, smoothed
-    const r = (s.stats.earned - lastEarned) / ((now - lastRate) / 1000);
-    rate = rate ? rate * 0.8 + r * 0.2 : r;
-    lastRate = now; lastEarned = s.stats.earned;
+  if (now - lastRate >= 1000) { // measured income per game, smoothed
+    for (const g of GK) {
+      const r = (s.g[g].total - lastTotal[g]) / ((now - lastRate) / 1000);
+      rate[g] = rate[g] ? rate[g] * 0.8 + r * 0.2 : r;
+      lastTotal[g] = s.g[g].total;
+    }
+    lastRate = now;
   }
   if (now - lastUi >= 100) { updateUi(now); lastUi = now; }
   drawFx(dt);
