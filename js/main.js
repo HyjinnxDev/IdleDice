@@ -93,7 +93,7 @@ function shake(big) {
 }
 
 // ---------- stage (one renderer per game) ----------
-const count = g => (g === 'dice' ? 1 + G.L(s, 'd_die') + G.L(s, 'd_six') : g === 'coin' ? 1 + G.L(s, 'c_twin') : 5 + G.L(s, 'k_extra'));
+const count = g => (g === 'dice' ? 1 + G.L(s, 'd_die') + G.L(s, 'd_six') : g === 'coin' ? G.coinCount(s) : 5 + G.L(s, 'k_extra'));
 const tierOf = g => Math.min(7, G.L(s, { dice: 'd_mat', coin: 'c_mint', cards: 'k_foil' }[g]));
 
 function buildStage() {
@@ -265,20 +265,21 @@ $('modal').addEventListener('click', e => {
 });
 
 // ---------- upgrade trees ----------
-const RH = 92; // row height px
+const RH = 92, CW = 76; // row height, column width px
 const curTree = () => (tab === 'perm' ? 'perm' : s.view);
 const curSel = () => sel[curTree()] ?? G.TREES[curTree()][0].id;
 
 function treeHtml(id) {
-  const nodes = G.TREES[id], h = (Math.max(...nodes.map(n => n.y)) + 1) * RH, X = x => (x + 0.5) * 20;
+  const nodes = G.TREES[id], h = (Math.max(...nodes.map(n => n.y)) + 1) * RH, X = x => (x + 0.5) * CW;
+  const w = (Math.max(...nodes.map(n => n.x)) + 1) * CW;
   const lines = nodes.flatMap(n => n.req.map(p => {
     const a = G.NODE[p];
     return `<line data-a="${p}" x1="${X(a.x)}" y1="${a.y * RH + 34}" x2="${X(n.x)}" y2="${n.y * RH + 34}"/>`;
   })).join('');
   return `<div class="infobar"><span class="ico" id="ii"></span><div class="info"><b id="in"></b> <small id="il"></small><p id="idesc"></p></div>
     <div class="buys"><button class="buy" data-buy id="ib"></button><button class="btn sm" data-max>Max</button></div></div>
-    <div class="tree" style="height:${h}px"><svg viewBox="0 0 100 ${h}" preserveAspectRatio="none">${lines}</svg>
-    ${nodes.map(n => `<button class="node" data-node="${n.id}" style="left:${X(n.x)}%;top:${n.y * RH + 2}px"><span class="ico">${n.icon}</span><span class="lv"></span><span class="nm">${n.name}</span></button>`).join('')}</div>`;
+    <div class="treewrap"><div class="tree" style="width:${w}px;height:${h}px"><svg viewBox="0 0 ${w} ${h}">${lines}</svg>
+    ${nodes.map(n => `<button class="node" data-node="${n.id}" style="left:${X(n.x)}px;top:${n.y * RH + 2}px"><span class="ico">${n.icon}</span><span class="lv"></span><span class="nm">${n.name}</span></button>`).join('')}</div></div>`;
 }
 
 function updateTree() {
@@ -427,7 +428,7 @@ function infoText(g) {
     const cap = G.streakCap(s), st = s.coin.streak;
     return `🔥 ${st}/${cap} · next heads ×${(G.streakGrowth(s) ** Math.min(cap, st + 1)).toFixed(2)} · ${Math.round((0.5 + 0.015 * G.L(s, 'c_weight')) * 100)}% heads${auto}`;
   }
-  return `${count(g)} cards · ${52 - 4 * G.L(s, 'k_thin')}-card deck${auto}`;
+  return `${count(g)} cards · ${G.deckSize(s)}-card deck${auto}`;
 }
 
 function updateUi(now = Date.now()) {

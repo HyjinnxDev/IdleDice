@@ -32,6 +32,20 @@ assert.equal(G.play(s, 'dice', seq(0.99), Infinity).gold, (6 + 2) * 2);
 s.buffs.frenzy = 100;
 assert.equal(G.play(s, 'dice', seq(0.99), 50).gold, 16 * 7);
 
+// new branches: echo doubles, gilded sixes, suit purge deck, every path has its own capstone (no merges)
+const e = G.newState(0);
+e.lv.d_echo = 10; e.lv.d_reson = 1;
+assert.equal(G.play(e, 'dice', seq(0.99, 0.99, 0.01), Infinity).gold, 6 * 3); // no crit, echo → ×(2+1)
+e.lv.d_echo = 0; e.lv.d_alch = 1;
+assert.ok(Math.abs(G.play(e, 'dice', seq(0.99), Infinity).gold - 6 * 1.2) < 1e-9);
+e.lv.k_thin = 4; e.lv.k_suit = 1;
+assert.equal(G.deckSize(e), 27);
+for (const t in G.TREES) {
+  const kids = {};
+  for (const nd of G.TREES[t]) { assert.ok(nd.req.length <= 1, `${nd.id} merges paths`); for (const r of nd.req) kids[r] = 1; }
+  if (t !== 'perm') assert.ok(G.TREES[t].filter(nd => !kids[nd.id]).length >= 6, `${t} needs 6 distinct endpoints`);
+}
+
 // coin: streak grows on heads, resets on tails, insurance keeps part
 const c = G.newState(0);
 c.lv.p_coin = 1;

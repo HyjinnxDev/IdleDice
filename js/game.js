@@ -42,12 +42,12 @@ export function newRun(s) {
 
 export const incomeMult = (s, now) => (1 + 0.1 * L(s, 'p_bonus')) * (now < s.buffs.frenzy ? 7 : 1);
 export const offlineCapH = s => 2 + 2 * L(s, 'p_off');
-export const goldenRate = s => 1 + 0.25 * L(s, 'p_gold');
+export const goldenRate = s => (1 + 0.25 * L(s, 'p_gold')) * (1 + 0.2 * L(s, 'd_gild'));
 
 // Pass now = Infinity to ignore timed buffs (estimates).
 export function autoIv(s, g, now = Infinity) {
   const p = GAMES[g].p;
-  const iv = Math.max(200, GAMES[g].iv * 0.9 ** L(s, p + '_speed') * 0.85 ** L(s, p + '_over'));
+  const iv = Math.max(100, GAMES[g].iv * 0.9 ** L(s, p + '_speed') * 0.85 ** L(s, p + '_over') * 0.95 ** L(s, p + '_perp'));
   return now < s.buffs.overdrive ? iv / 5 : iv;
 }
 
@@ -75,30 +75,35 @@ function playDice(s, rng, now) {
   const cb = combo(faces);
   let mult = 1 + (cb.mult - 1) * (1 + 0.25 * L(s, 'd_combo'));
   if (cb.name === 'JACKPOT') mult *= 2 ** L(s, 'd_jack');
+  if (cb.mult > 1) mult *= 1.15 ** L(s, 'd_fate');
   const crit = rng() < 0.02 * L(s, 'd_crit');
+  const echo = L(s, 'd_echo') > 0 && rng() < 0.04 * L(s, 'd_echo');
   const per = 2 ** L(s, 'd_mat') * 1.15 ** L(s, 'd_rush') * incomeMult(s, now);
-  const values = faces.map(f => (f + L(s, 'd_pip')) * per);
-  const gold = values.reduce((a, b) => a + b, 0) * mult * (crit ? 2 + 0.5 * L(s, 'd_critx') : 1);
-  return { g: 'dice', faces, values, combo: cb, crit, gold, rare: cb.name === 'JACKPOT',
-    label: cb.mult > 1 ? `${cb.name} ×${+mult.toFixed(1)}` : '' };
+  const values = faces.map(f => (f + L(s, 'd_pip')) * per * (f === 6 ? 1.2 ** L(s, 'd_alch') : 1));
+  const gold = values.reduce((a, b) => a + b, 0) * mult * (crit ? (2 + 0.5 * L(s, 'd_critx')) * 1.2 ** L(s, 'd_ocrit') : 1)
+    * (echo ? 2 + L(s, 'd_reson') : 1);
+  const label = [cb.mult > 1 ? `${cb.name} ×${+mult.toFixed(1)}` : '', echo ? 'ECHO' : ''].filter(Boolean).join(' · ');
+  return { g: 'dice', faces, values, combo: cb, crit, gold, rare: cb.name === 'JACKPOT', label };
 }
 
 // ---------- coinflip ----------
 export const streakGrowth = s => 1.2 + 0.04 * L(s, 'c_pow');
-export const streakCap = s => 10 + 2 * L(s, 'c_cap');
+export const streakCap = s => 10 + 2 * L(s, 'c_cap') + L(s, 'c_legend');
+export const coinCount = s => 1 + L(s, 'c_twin') + L(s, 'c_storm');
 
 function playCoin(s, rng, now) {
   const pHead = 0.5 + 0.015 * L(s, 'c_weight'), cap = streakCap(s), gr = streakGrowth(s);
   const v = (1 + L(s, 'c_shiny')) * 2 ** L(s, 'c_mint') * 1.15 ** L(s, 'c_rush') * incomeMult(s, now);
+  const pEdge = 0.002 * (1 + L(s, 'c_edge')) + 0.001 * L(s, 'c_spin');
   const flips = [];
   let gold = 0, rare = false;
-  for (let i = 1 + L(s, 'c_twin'); i > 0; i--) {
-    if (rng() < 0.002 * (1 + L(s, 'c_edge'))) { flips.push('E'); gold += v * 250; continue; }
+  for (let i = coinCount(s); i > 0; i--) {
+    if (rng() < pEdge) { flips.push('E'); gold += v * (250 + 100 * L(s, 'c_razor')); continue; }
     if (rng() < pHead) {
       const prev = s.coin.streak;
       s.coin.streak = Math.min(cap, prev + 1);
       if (prev < 10 && s.coin.streak >= 10) rare = true;
-      gold += v * gr ** s.coin.streak;
+      gold += v * gr ** s.coin.streak * 1.15 ** L(s, 'c_hot');
       flips.push('H');
     } else {
       s.coin.streak = Math.floor(s.coin.streak * 0.25 * L(s, 'c_ins'));
@@ -144,17 +149,28 @@ export function pokerHand(cards) {
   return H(0, [g1[0]]);
 }
 
-function playCards(s, rng, now) {
+export const deckSize = s => (13 - L(s, 'k_thin')) * (4 - L(s, 'k_suit'));
+
+function deal(s, rng, now) {
   const deck = [];
-  for (let r = 2 + L(s, 'k_thin'); r <= 14; r++) for (let su = 0; su < 4; su++) deck.push({ r, s: su });
+  for (let r = 2 + L(s, 'k_thin'); r <= 14; r++) for (let su = 0; su < 4 - L(s, 'k_suit'); su++) deck.push({ r, s: su });
   const n = 5 + L(s, 'k_extra');
   for (let i = 0; i < n; i++) { const j = i + Math.floor(rng() * (deck.length - i)); [deck[i], deck[j]] = [deck[j], deck[i]]; }
   const cards = deck.slice(0, n), h = pokerHand(cards);
   let mult = 1 + (h.mult - 1) * (1 + 0.25 * L(s, 'k_power'));
-  if (h.rank >= 4) mult *= 1 + L(s, 'k_royal');
-  const base = h.used.reduce((a, i) => a + cards[i].r, 0) * (1 + 0.25 * L(s, 'k_sharp'));
+  if (h.rank >= 4) mult *= (1 + L(s, 'k_royal')) * 1.15 ** L(s, 'k_grand');
+  if (h.rank >= 1 && h.rank <= 3) mult *= (1 + 0.5 * L(s, 'k_pairs')) * 1.15 ** L(s, 'k_bread');
+  const face = 1 + 0.25 * L(s, 'k_face');
+  const base = h.used.reduce((a, i) => a + cards[i].r * (cards[i].r >= 11 ? face : 1), 0) * (1 + 0.25 * L(s, 'k_sharp'));
   const gold = base * mult * 2 ** L(s, 'k_foil') * 1.15 ** L(s, 'k_rush') * incomeMult(s, now);
   return { g: 'cards', cards, hand: h, gold, rare: h.rank >= 7, label: h.rank ? `${h.name} ×${+mult.toFixed(1)}` : '' };
+}
+
+function playCards(s, rng, now) {
+  const a = deal(s, rng, now);
+  if (!(L(s, 'k_second') > 0 && rng() < 0.08 * L(s, 'k_second'))) return a;
+  const b = deal(s, rng, now);
+  return b.gold > a.gold ? b : a;
 }
 
 const PLAY = { dice: playDice, coin: playCoin, cards: playCards };
@@ -186,7 +202,8 @@ export function buy(s, id) {
 }
 
 // ---------- prestige ----------
-export const chipGain = s => (s.runEarned >= PRESTIGE_AT ? Math.floor(3 * Math.sqrt(s.runEarned / PRESTIGE_AT)) : 0);
+export const chipGain = s => (s.runEarned >= PRESTIGE_AT
+  ? Math.floor(3 * Math.sqrt(s.runEarned / PRESTIGE_AT) * (1 + 0.1 * L(s, 'p_chipx'))) : 0);
 
 export function ascend(s) {
   const gain = chipGain(s);
@@ -212,7 +229,7 @@ export function gps(s, n = 300, rng = Math.random) {
 
 export function offlineGold(s, now) {
   const secs = Math.min(Math.max(0, (now - s.last) / 1000), offlineCapH(s) * 3600);
-  return secs < 60 ? { gold: 0, secs } : { gold: Math.floor(gps(s) * secs), secs };
+  return secs < 60 ? { gold: 0, secs } : { gold: Math.floor(gps(s) * secs * (1 + 0.25 * L(s, 'p_offx'))), secs };
 }
 
 // Hi-Lo: ties lose; payout scales with odds and is slightly in the player's favour (tickets are scarce).
