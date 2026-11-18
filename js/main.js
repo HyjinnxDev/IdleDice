@@ -329,6 +329,7 @@ function renderSheet() {
       <p class="note">Saves automatically. Home-screen apps on iPhone keep separate storage from Safari, so export to back up or move a save.</p>
       <textarea id="savebox" placeholder="Paste a save here, then Import"></textarea>
       <div class="btns"><button class="btn" data-cmd="export">Export</button><button class="btn" data-cmd="import">Import</button></div>
+      <button class="btn" data-cmd="unlockall">🧪 Unlock all games (test)</button>
       <button class="btn danger" data-cmd="reset">Hard reset</button></div>`;
   }
   updateSheet();
@@ -408,6 +409,9 @@ async function cmd(c) {
     try { await navigator.clipboard.writeText(str); toast('Save copied'); } catch { $('savebox').select(); toast('Copy the text above'); }
   } else if (c === 'import') {
     try { s = importSave($('savebox').value); resetView(); toast('Save loaded'); } catch { toast('Invalid save', 'bad'); }
+  } else if (c === 'unlockall') { // ponytail: test helper, remove before real release
+    for (const g in G.GAMES) if (G.GAMES[g].unlock) s.lv[G.GAMES[g].unlock] = 1;
+    resetView(); toast('All games unlocked');
   } else if (c === 'reset') {
     confirmModal('<h2>Hard reset?</h2><p>Erases everything, including chips. Cannot be undone.</p>', 'Erase', () => {
       wipe(); s = G.newState(); resetView();
